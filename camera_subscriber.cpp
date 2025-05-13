@@ -1,5 +1,5 @@
 #include <iostream>
-
+#include <chrono>
 #include <librealsense2/rs.hpp>
 #include <zmq.hpp>
 
@@ -9,6 +9,8 @@
 #include <pcl/visualization/cloud_viewer.h>
 // #include <opencv2/opencv.hpp>
 
+using namespace std::chrono_literals;
+
 int main() {
     // Initialize ZMQ context and socket
     zmq::context_t context(1);
@@ -17,7 +19,12 @@ int main() {
 
     std::cout << "Subscriber started, waiting for messages..." << std::endl;
 
+    // Initialize PCL viewer
     pcl::visualization::CloudViewer viewer("Received PointCloud");
+
+    // Statistics
+    int frame_count = 0;
+    auto start_time = std::chrono::steady_clock::now();
 
     while (!viewer.wasStopped()) {
         zmq::message_t routing_id, hostname_message, width_message, height_message, pointcloud_message;
@@ -28,6 +35,15 @@ int main() {
         socket.recv(&width_message);
         socket.recv(&height_message);
         socket.recv(&pointcloud_message);
+
+        // Update statistics
+        frame_count++;
+        if (std::chrono::steady_clock::now() - start_time >= 5s) {
+            float fps = frame_count/5.0;
+            frame_count = 0;
+            start_time = std::chrono::steady_clock::now();
+            std::cout << "FPS over 5s: " << fps << std::endl;
+        }
         
         // Get the hostname
         std::string hostname((char*)hostname_message.data(), hostname_message.size());
