@@ -1,0 +1,13 @@
+.vscode/
+
+/build/
+/lib/*/build/
+Makefile
+CMakeFiles/**
+CMakeCache.txt
+CMakeOutput.log
+CMakeError.log
+*.o
+*.so
+*.a
+

@@ -1,0 +1,9 @@
+[submodule "lib/libzmq"]
+	path = lib/libzmq
+	url = https://github.com/zeromq/libzmq.git
+[submodule "lib/cppzmq"]
+	path = lib/cppzmq
+	url = https://github.com/zeromq/cppzmq.git
+[submodule "lib/librealsense"]
+	path = lib/librealsense
+	url = https://github.com/IntelRealSense/librealsense.git
