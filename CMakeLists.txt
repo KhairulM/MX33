@@ -30,7 +30,6 @@ target_link_libraries(
 
 target_link_libraries(
     camera_subscriber
-    realsense2
     cppzmq
     ${PCL_LIBRARIES}
 )

@@ -3,7 +3,6 @@
 #include <csignal>
 #include <unistd.h>
 
-#include <librealsense2/rs.hpp>
 #include <zmq.hpp>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -12,7 +11,6 @@
 
 using namespace std::chrono_literals;
 
-auto STATISTIC_INTERVAL = 3s;
 bool is_stopped = false;
 
 class PointCloudSubscriber {
@@ -22,7 +20,7 @@ class PointCloudSubscriber {
         int height;
 
         // pcl::visualization::CloudViewer::Ptr viewer;
-
+        const std::chrono::seconds statistic_interval = 3s;
         int total_frames_received;
         int frame_count;
         std::chrono::steady_clock::time_point start_time;
@@ -78,7 +76,7 @@ class PointCloudSubscriber {
             total_frames_received++;
             frame_count++;
             auto now = std::chrono::steady_clock::now();
-            if (now - start_time >= STATISTIC_INTERVAL) {
+            if (now - start_time >= statistic_interval) {
                 float fps = frame_count / std::chrono::duration<float>(now - start_time).count();
                 frame_count = 0;
                 start_time = now;
@@ -93,27 +91,30 @@ void signalHandler(int signum) {
 }
 
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        argv[1] = "5555";
+    }
+
     signal(SIGINT, signalHandler); // Register signal handler for Ctrl+C
 
     // Initialize ZMQ context and socket
-    const int zmq_hwm = 10;
     zmq::context_t context(1);
-    zmq::socket_t socket(context, ZMQ_ROUTER);
-    socket.setsockopt(ZMQ_RCVHWM, zmq_hwm);
-    socket.bind("tcp://*:5555");
+    zmq::socket_t socket(context, ZMQ_SUB);
+    socket.bind("tcp://*:"+std::string(argv[1]));
+    socket.set(zmq::sockopt::subscribe, "pointcloud"); // Subscribe to the topic "pointcloud"
 
-    // Store map of routing id to PointCloudSubscriber
+    // Store map of hostname to PointCloudSubscriber
     std::map<std::string, PointCloudSubscriber> subscribers;
     
     std::cout << "Server started, waiting for messages..." << std::endl;
 
     while (!is_stopped) {
-        zmq::message_t routing_id, hostname_message, width_message, height_message, pointcloud_message;
+        zmq::message_t topic, hostname_message, width_message, height_message, pointcloud_message;
 
         // Receive multipart message
         try {
-            socket.recv(&routing_id); // Receive the routing ID first
+            socket.recv(&topic); // Receive the topic first
             socket.recv(&hostname_message);
             socket.recv(&width_message);
             socket.recv(&height_message);
@@ -122,20 +123,21 @@ int main() {
             break;
         }
 
-        // Convert routing ID to string
-        std::string routing_id_str(static_cast<char*>(routing_id.data()), routing_id.size());
+        // Notify PointCloudSubscriber
+        std::string hostname((char*)hostname_message.data(), hostname_message.size());
 
-        if (subscribers.find(routing_id_str) == subscribers.end()) {
+        if (subscribers.find(hostname) == subscribers.end()) {
             // New publisher, create a new PointCloudSubscriber
-            std::string hostname((char*)hostname_message.data(), hostname_message.size());
             int width = *(int*)width_message.data();
             int height = *(int*)height_message.data();
 
-            subscribers.emplace(routing_id_str, PointCloudSubscriber(hostname, width, height));
+            subscribers.emplace(hostname, PointCloudSubscriber(hostname, width, height));
         }
 
-        subscribers[routing_id_str].onPointCloudMessage(pointcloud_message);
+        subscribers[hostname].onPointCloudMessage(pointcloud_message);
     }
+
+    socket.close();
 
     for (auto& subscriber : subscribers) {
         std::cout << "\nSubscriber Hostname: " << subscriber.second.hostname << ", Total frames received: " << subscriber.second.total_frames_received << std::endl;
