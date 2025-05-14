@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
     int total_frames_sent = 0;
     int frame_count = 0;
     auto start_time = std::chrono::steady_clock::now();
-    
+
     // Realsense callback function
     auto cameraCallback = [&](const rs2::frame& frame) {
         // Check if stopped
@@ -108,10 +108,7 @@ int main(int argc, char* argv[]) {
 
         // Update statistics
         total_frames_sent++;
-
-        mutex.lock();
         frame_count++;
-        mutex.unlock();
     };
     
     camera_pipeline.start(config, cameraCallback);
@@ -120,13 +117,13 @@ int main(int argc, char* argv[]) {
         // Update statistics
         auto now = std::chrono::steady_clock::now();
         if (now - start_time >= statistic_interval) {
-            float fps = frame_count / std::chrono::duration<float>(now - start_time).count();
+            std::lock_guard<std::mutex> lock(mutex);
+            
+            float fps = (float)frame_count / std::chrono::duration<float>(now - start_time).count();
             std::cout << "FPS: " << fps << std::endl;
 
-            mutex.lock();
             frame_count = 0;
             start_time = now;
-            mutex.unlock();
         }
     }
 
