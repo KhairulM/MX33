@@ -1,5 +1,6 @@
 #include <iostream>
 #include <chrono>
+#include <csignal>
 #include <unistd.h>
 
 #include <librealsense2/rs.hpp>
@@ -7,7 +8,16 @@
 
 using namespace std::chrono_literals;
 
+auto STATISTIC_INTERVAL = 3s;
+bool is_stopped = false;
+
+void signalHandler(int signum) {
+    is_stopped = true;
+}
+
 int main() {
+    signal(SIGINT, signalHandler); // Register signal handler for Ctrl+C
+
     // Configure connection constants
     char pub_hostname[1024];
     gethostname(pub_hostname, 1024);
@@ -42,7 +52,7 @@ int main() {
     int frame_count = 0;
     auto start_time = std::chrono::steady_clock::now();
 
-    while (true)
+    while (!is_stopped)
     {
         // Wait for a new frame
         rs2::frameset frames = camera_pipeline.wait_for_frames(); // Wait for a set of frames from multiple streams (video, motion, pose, etc)
@@ -71,23 +81,27 @@ int main() {
         zmq::message_t pointcloud_message(pointcloud_data.data(), pointcloud_data.size() * sizeof(float));
 
         // Send the messages as multipart messages
-        socket.send(hostname_message, zmq::send_flags::sndmore);
-        socket.send(width_message, zmq::send_flags::sndmore);
-        socket.send(height_message, zmq::send_flags::sndmore);
-        socket.send(pointcloud_message, zmq::send_flags::none);
+        try {
+            socket.send(hostname_message, zmq::send_flags::sndmore);
+            socket.send(width_message, zmq::send_flags::sndmore);
+            socket.send(height_message, zmq::send_flags::sndmore);
+            socket.send(pointcloud_message, zmq::send_flags::none);
+        } catch (const zmq::error_t& e) {
+            break;
+        }
 
         // Update statistics
         total_frames_sent++;
         frame_count++;
-        if (std::chrono::steady_clock::now() - start_time >= 5s) {
-            float fps = frame_count / 5.0;
+        if (auto now = std::chrono::steady_clock::now(); now - start_time >= STATISTIC_INTERVAL) {
+            float fps = frame_count / std::chrono::duration<float>(now - start_time).count();
             frame_count = 0;
-            start_time = std::chrono::steady_clock::now();
+            start_time = now;
             std::cout << "FPS: " << fps << std::endl;
         }
     }
 
-    std::cout << "Total frames sent: " << total_frames_sent << std::endl;
+    std::cout << "\nTotal frames sent: " << total_frames_sent << std::endl;
 
     return 0;
 }
