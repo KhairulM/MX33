@@ -4,7 +4,6 @@
 
 #include <librealsense2/rs.hpp>
 #include <zmq.hpp>
-// #include <opencv2/opencv.hpp>
 
 using namespace std::chrono_literals;
 
@@ -14,7 +13,7 @@ int main() {
     gethostname(pub_hostname, 1024);
     std::cout << "Hostname: " << pub_hostname << std::endl;
 
-    const char* server_host = "192.168.0.7"; // Server hostname
+    const char* server_host = "localhost"; // Server hostname
     const int server_port = 5555; // Server port
 
     // Initialize ZMQ context and socket
@@ -39,20 +38,12 @@ int main() {
     std::cout << "Server address: tcp://" << server_host << ":" << server_port << std::endl;
 
     // Statistics
+    int total_frames_sent = 0;
     int frame_count = 0;
     auto start_time = std::chrono::steady_clock::now();
 
     while (true)
     {
-        // Displaying the depth frame
-        // cv::Mat depth_frame(height, width, CV_16U, const_cast<void*>(depth.get_data()));
-        // cv::Mat depth_frame_8u;
-        // depth_frame.convertTo(depth_frame_8u, CV_8U, 255.0 / 3000); // assuming max depth of 3 meters
-        // cv::Mat depth_colormap;
-        // cv::applyColorMap(depth_frame_8u, depth_colormap, cv::COLORMAP_JET);
-        // cv::imshow("Published Depth Frame", depth_colormap); // Display the depth frame
-        // cv::waitKey(1); // Wait for a short period to allow the window to update
-
         // Wait for a new frame
         rs2::frameset frames = camera_pipeline.wait_for_frames(); // Wait for a set of frames from multiple streams (video, motion, pose, etc)
         rs2::depth_frame depth = frames.get_depth_frame(); // Get the depth frame from the frameset
@@ -86,14 +77,17 @@ int main() {
         socket.send(pointcloud_message, zmq::send_flags::none);
 
         // Update statistics
+        total_frames_sent++;
         frame_count++;
         if (std::chrono::steady_clock::now() - start_time >= 5s) {
             float fps = frame_count / 5.0;
             frame_count = 0;
             start_time = std::chrono::steady_clock::now();
-            std::cout << "FPS over 5s: " << fps << std::endl;
+            std::cout << "FPS: " << fps << std::endl;
         }
     }
+
+    std::cout << "Total frames sent: " << total_frames_sent << std::endl;
 
     return 0;
 }
