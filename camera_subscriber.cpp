@@ -21,7 +21,7 @@ class PointCloudSubscriber {
         int width;
         int height;
 
-        pcl::visualization::CloudViewer::Ptr viewer;
+        // pcl::visualization::CloudViewer::Ptr viewer;
 
         int total_frames_received;
         int frame_count;
@@ -29,7 +29,7 @@ class PointCloudSubscriber {
 
         // Default constructor
         PointCloudSubscriber() : hostname(""), width(0), height(0) {
-            viewer = nullptr;
+            // viewer = nullptr;
             total_frames_received = 0;
             frame_count = 0;
             start_time = std::chrono::steady_clock::now();
@@ -37,7 +37,7 @@ class PointCloudSubscriber {
 
         // Constructor
         PointCloudSubscriber(std::string host, int w, int h): hostname(host), width(w), height(h) {
-            viewer = pcl::visualization::CloudViewer::Ptr(new pcl::visualization::CloudViewer(hostname + " Point Cloud Viewer"));
+            // viewer = pcl::visualization::CloudViewer::Ptr(new pcl::visualization::CloudViewer(hostname + " Point Cloud Viewer"));
             total_frames_received = 0;
             frame_count = 0;
             start_time = std::chrono::steady_clock::now();
@@ -70,14 +70,15 @@ class PointCloudSubscriber {
             }
 
             // Display the point cloud
-            if (!viewer->wasStopped()) {
-                viewer->showCloud(cloud);
-            }
+            // if (!viewer->wasStopped()) {
+            //     viewer->showCloud(cloud);
+            // }
 
             // Update statistics
             total_frames_received++;
             frame_count++;
-            if (auto now = std::chrono::steady_clock::now(); now - start_time >= STATISTIC_INTERVAL) {
+            auto now = std::chrono::steady_clock::now();
+            if (now - start_time >= STATISTIC_INTERVAL) {
                 float fps = frame_count / std::chrono::duration<float>(now - start_time).count();
                 frame_count = 0;
                 start_time = now;
