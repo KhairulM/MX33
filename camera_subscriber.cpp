@@ -97,8 +97,10 @@ int main() {
     signal(SIGINT, signalHandler); // Register signal handler for Ctrl+C
 
     // Initialize ZMQ context and socket
+    const int zmq_hwm = 10;
     zmq::context_t context(1);
     zmq::socket_t socket(context, ZMQ_ROUTER);
+    socket.setsockopt(ZMQ_RCVHWM, zmq_hwm);
     socket.bind("tcp://*:5555");
 
     // Store map of routing id to PointCloudSubscriber

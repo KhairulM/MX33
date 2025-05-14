@@ -27,8 +27,10 @@ int main() {
     const int server_port = 5555; // Server port
 
     // Initialize ZMQ context and socket
+    const int zmq_hwm = 10;
     zmq::context_t context(1);
     zmq::socket_t socket(context, ZMQ_DEALER);
+    socket.setsockopt(ZMQ_SNDHWM, zmq_hwm);
     socket.connect("tcp://" + std::string(server_host) + ":" + std::to_string(server_port));
 
     // Initialize RealSense camera
