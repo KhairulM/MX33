@@ -4,13 +4,15 @@
 #include <mutex>
 #include <unistd.h>
 
+#include <atomic>
+
 #include <librealsense2/rs.hpp>
 #include <zmq.hpp>
 
 using namespace std::chrono_literals;
 
 std::mutex mutex;
-bool is_stopped = false;
+std::atomic<bool> is_stopped(false);
 
 void signalHandler(int signum) {
     is_stopped = true;
