@@ -97,12 +97,13 @@ int main(int argc, char* argv[]) {
         zmq::message_t pointcloud_message(pointcloud_data.data(), pointcloud_data.size() * sizeof(float));
         
         // Send the messages as multipart messages
-        socket.send(zmq::str_buffer("pointcloud"), zmq::send_flags::sndmore);
-        socket.send(hostname_message, zmq::send_flags::sndmore);
-        socket.send(width_message, zmq::send_flags::sndmore);
-        socket.send(height_message, zmq::send_flags::sndmore);
-        socket.send(pointcloud_message, zmq::send_flags::none);
-        
+        auto send_flags = zmq::send_flags::sndmore | zmq::send_flags::dontwait;
+        socket.send(zmq::str_buffer("pointcloud"), send_flags);
+        socket.send(hostname_message, send_flags);
+        socket.send(width_message, send_flags);
+        socket.send(height_message, send_flags);
+        socket.send(pointcloud_message, zmq::send_flags::dontwait);
+
         // Update statistics
         total_frames_sent++;
         frame_count++;
