@@ -21,8 +21,12 @@ void signalHandler(int signum) {
 int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler); // Register signal handler for Ctrl+C
 
-    if (argc != 3) {
+    if (argc == 1) {
         argv[1] = "localhost";
+        argv[2] = "5555";
+    }
+    
+    if (argc == 2) {
         argv[2] = "5555";
     }
 
