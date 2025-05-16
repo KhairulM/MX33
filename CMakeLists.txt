@@ -18,8 +18,8 @@ link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
 # Add executables
-add_executable(camera_publisher camera_publisher.cpp)
-add_executable(camera_subscriber camera_subscriber.cpp)
+add_executable(camera_publisher demo/camera_publisher.cpp)
+add_executable(camera_subscriber demo/camera_subscriber.cpp)
 
 # Link libraries
 target_link_libraries(
