@@ -127,12 +127,14 @@ int main(int argc, char* argv[]) {
         "pointcloud"
     );
 
+
     // Statistics
     const auto statistic_interval = 3s;
     int total_frames_received = 0;
     int frame_count = 0;
     auto start_time = std::chrono::steady_clock::now();
     
+    std::cout << "Connected to broker at tcp://" + std::string(argv[1]) + ":" + std::string(argv[2]) << std::endl;
     std::cout << "Server started, waiting for messages..." << std::endl;
 
     while (!is_stopped) {

@@ -29,19 +29,16 @@ class Publisher {
             mContext.close();
         }
 
-        void publish(const std::string& message) {
-            // Parse the message to JSON
-            json message_json = json::parse(message);
-            publish(message_json);
-        }
-
         void publish(const json& message) {
             // Serialize the json to bson
-            std::vector<uint8_t> message_bson = json::to_bson(message);
+            // std::vector<uint8_t> message_bson = json::to_bson(message);
+
+            // Serialize the json to string
+            std::string message_string = message.dump();
 
             // Create a multipart message
             zmq::message_t topic_message(mTopic.data(), mTopic.size());
-            zmq::message_t zmq_message(message_bson.data(), message_bson.size());
+            zmq::message_t zmq_message(message_string.data(), message_string.size());
 
             // Send the multipart message
             mSocket.send(topic_message, zmq::send_flags::sndmore);

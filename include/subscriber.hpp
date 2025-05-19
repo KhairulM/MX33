@@ -75,11 +75,14 @@ class Subscriber {
             mMessages.pop();
 
             // Convert ZMQ message to bson std::vector<uint8_t>
-            std::vector<uint8_t> message_bson(message.size());
-            memcpy(message_bson.data(), message.data(), message.size());
+            // std::vector<uint8_t> message_bson(message.size());
+            // memcpy(message_bson.data(), message.data(), message.size());
 
             // Deserialize the message to JSON
-            json message_json = json::from_bson(message_bson);
+            // json message_json = json::from_bson(message_bson);
+
+            // Deserialize the message from string
+            json message_json = json::parse((char*)(message.data()));
             return message_json;
         }
 };
