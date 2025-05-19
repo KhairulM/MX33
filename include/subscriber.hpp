@@ -82,7 +82,7 @@ class Subscriber {
             // json message_json = json::from_bson(message_bson);
 
             // Deserialize the message from string
-            json message_json = json::parse((char*)(message.data()));
+            json message_json = json::parse(message.to_string());
             return message_json;
         }
 };

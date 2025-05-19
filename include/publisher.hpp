@@ -40,7 +40,7 @@ class Publisher {
             zmq::message_t topic_message(mTopic.data(), mTopic.size());
             zmq::message_t zmq_message(message_string.data(), message_string.size());
 
-            // Send the multipart message
+            // Send the message
             mSocket.send(topic_message, zmq::send_flags::sndmore);
             mSocket.send(zmq_message, zmq::send_flags::none);
         }
