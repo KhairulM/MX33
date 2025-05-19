@@ -3,13 +3,16 @@
 #include <csignal>
 #include <mutex>
 #include <unistd.h>
-
 #include <atomic>
 
 #include <librealsense2/rs.hpp>
 #include <zmq.hpp>
 
+#include <publisher.hpp>
+#include <nlohmann/json.hpp>
+
 using namespace std::chrono_literals;
+using json = nlohmann::json;
 
 std::mutex mutex;
 std::atomic<bool> is_stopped(false);
@@ -39,11 +42,18 @@ int main(int argc, char* argv[]) {
     const int server_port = atoi(argv[2]); // Server port
 
     // Initialize ZMQ context and socket
-    const int zmq_hwm = 45;
-    zmq::context_t context(1);
-    zmq::socket_t socket(context, ZMQ_PUB);
-    socket.setsockopt(ZMQ_SNDHWM, zmq_hwm);
-    socket.connect("tcp://" + std::string(server_host) + ":" + std::to_string(server_port));
+    // const int zmq_hwm = 45;
+    // zmq::context_t context(1);
+    // zmq::socket_t socket(context, ZMQ_PUB);
+    // socket.setsockopt(ZMQ_SNDHWM, zmq_hwm);
+    // socket.connect("tcp://" + std::string(server_host) + ":" + std::to_string(server_port));
+
+    // Create a publisher
+    Publisher pointcloud_publisher(
+        "PointCloudPublisher", 
+        "tcp://" + std::string(server_host) + ":" + std::to_string(server_port),
+        "pointcloud"
+    );
 
     // Configure RealSense camera
     const int resolution_width = 640; // Camera width
@@ -97,18 +107,28 @@ int main(int argc, char* argv[]) {
         memcpy(pointcloud_data.data(), vertices, size * 3 * sizeof(float));
         
         // Send a multipart message of pub_hostname, frame_width, frame_height, and depth data
-        zmq::message_t hostname_message(pub_hostname, strlen(pub_hostname));
-        zmq::message_t width_message(&width, sizeof(width));
-        zmq::message_t height_message(&height, sizeof(height));
-        zmq::message_t pointcloud_message(pointcloud_data.data(), pointcloud_data.size() * sizeof(float));
+        // zmq::message_t hostname_message(pub_hostname, strlen(pub_hostname));
+        // zmq::message_t width_message(&width, sizeof(width));
+        // zmq::message_t height_message(&height, sizeof(height));
+        // zmq::message_t pointcloud_message(pointcloud_data.data(), pointcloud_data.size() * sizeof(float));
         
         // Send the messages as multipart messages
-        auto send_flags = zmq::send_flags::sndmore | zmq::send_flags::dontwait;
-        socket.send(zmq::str_buffer("pointcloud"), send_flags);
-        socket.send(hostname_message, send_flags);
-        socket.send(width_message, send_flags);
-        socket.send(height_message, send_flags);
-        socket.send(pointcloud_message, zmq::send_flags::dontwait);
+        // auto send_flags = zmq::send_flags::sndmore | zmq::send_flags::dontwait;
+        // socket.send(zmq::str_buffer("pointcloud"), send_flags);
+        // socket.send(hostname_message, send_flags);
+        // socket.send(width_message, send_flags);
+        // socket.send(height_message, send_flags);
+        // socket.send(pointcloud_message, zmq::send_flags::dontwait);
+
+        // Create a JSON message
+        json message_json;
+        message_json["hostname"] = pub_hostname;
+        message_json["width"] = width;
+        message_json["height"] = height;
+        message_json["pointcloud"] = pointcloud_data;
+
+        // Publish the messages
+        pointcloud_publisher.publish(message_json);
 
         // Update statistics
         total_frames_sent++;
@@ -132,7 +152,6 @@ int main(int argc, char* argv[]) {
     }
 
     camera_pipeline.stop();
-    socket.close();
 
     std::cout << "\nTotal frames sent: " << total_frames_sent << std::endl;
 
