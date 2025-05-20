@@ -1,9 +1,6 @@
 #include <string>
 #include <zmq.hpp>
-#include <nlohmann/json.hpp>
 #include <msgpack.hpp>
-
-using json = nlohmann::json;
 
 template<typename T>
 class Publisher {
@@ -29,22 +26,6 @@ class Publisher {
         ~Publisher() {
             mSocket.close();
             mContext.close();
-        }
-
-        void publish(const json& message) {
-            // Serialize the json to bson
-            // std::vector<uint8_t> message_bson = json::to_bson(message);
-
-            // Serialize the json to string
-            std::string message_string = message.dump();
-
-            // Create a multipart message
-            zmq::message_t topic_message(mTopic.data(), mTopic.size());
-            zmq::message_t zmq_message(message_string.data(), message_string.size());
-
-            // Send the message
-            mSocket.send(topic_message, zmq::send_flags::sndmore);
-            mSocket.send(zmq_message, zmq::send_flags::none);
         }
 
         void publish(const T& message) {

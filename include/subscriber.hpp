@@ -5,10 +5,7 @@
 #include <memory>
 
 #include <zmq.hpp>
-#include <nlohmann/json.hpp>
 #include <msgpack.hpp>
-
-using json = nlohmann::json;
 
 template<typename T>
 class Subscriber {
@@ -66,27 +63,6 @@ class Subscriber {
             if (mThread.joinable()) {
                 mThread.join();
             }
-        }
-
-        json getMessage() {
-            std::lock_guard<std::mutex> lock(mMutex);
-            if (mMessages.empty()) {
-                return json::object();
-            }
-
-            zmq::message_t message = std::move(mMessages.front());
-            mMessages.pop();
-
-            // Convert ZMQ message to bson std::vector<uint8_t>
-            // std::vector<uint8_t> message_bson(message.size());
-            // memcpy(message_bson.data(), message.data(), message.size());
-
-            // Deserialize the message to JSON
-            // json message_json = json::from_bson(message_bson);
-
-            // Deserialize the message from string
-            json message_json = json::parse(message.to_string());
-            return message_json;
         }
 
         std::unique_ptr<T> getMessageObject() {

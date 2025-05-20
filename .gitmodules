@@ -7,10 +7,6 @@
 [submodule "lib/librealsense"]
 	path = lib/librealsense
 	url = https://github.com/IntelRealSense/librealsense.git
-[submodule "lib/json"]
-	path = lib/json
-	url = https://github.com/nlohmann/json.git
-	branch = master
 [submodule "lib/msgpack"]
 	path = lib/msgpack
 	url = https://github.com/msgpack/msgpack-c.git

@@ -24,12 +24,18 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler); // Register signal handler for Ctrl+C
 
     if (argc == 1) {
-        argv[1] = "localhost";
-        argv[2] = "5555";
+        argv[1] = "pointcloud";
+        argv[2] = "localhost";
+        argv[3] = "5555";
     }
     
     if (argc == 2) {
-        argv[2] = "5555";
+        argv[2] = "localhost";
+        argv[3] = "5555";
+    }
+
+    if (argc == 3) {
+        argv[3] = "5555";
     }
 
     // Configure connection constants
@@ -40,18 +46,11 @@ int main(int argc, char* argv[]) {
     const char* server_host = argv[1]; // Server hostname
     const int server_port = atoi(argv[2]); // Server port
 
-    // Initialize ZMQ context and socket
-    // const int zmq_hwm = 45;
-    // zmq::context_t context(1);
-    // zmq::socket_t socket(context, ZMQ_PUB);
-    // socket.setsockopt(ZMQ_SNDHWM, zmq_hwm);
-    // socket.connect("tcp://" + std::string(server_host) + ":" + std::to_string(server_port));
-
     // Create a publisher
     Publisher<Pointcloud> pointcloud_publisher(
         "PointcloudPublisher", 
         "tcp://" + std::string(server_host) + ":" + std::to_string(server_port),
-        "pointcloud"
+        std::string(argv[3])
     );
 
     // Configure RealSense camera
@@ -105,27 +104,6 @@ int main(int argc, char* argv[]) {
         std::vector<float> pointcloud_data(size * 3);
         memcpy(pointcloud_data.data(), vertices, size * 3 * sizeof(float));
         
-        // Send a multipart message of pub_hostname, frame_width, frame_height, and depth data
-        // zmq::message_t hostname_message(pub_hostname, strlen(pub_hostname));
-        // zmq::message_t width_message(&width, sizeof(width));
-        // zmq::message_t height_message(&height, sizeof(height));
-        // zmq::message_t pointcloud_message(pointcloud_data.data(), pointcloud_data.size() * sizeof(float));
-        
-        // Send the messages as multipart messages
-        // auto send_flags = zmq::send_flags::sndmore | zmq::send_flags::dontwait;
-        // socket.send(zmq::str_buffer("pointcloud"), send_flags);
-        // socket.send(hostname_message, send_flags);
-        // socket.send(width_message, send_flags);
-        // socket.send(height_message, send_flags);
-        // socket.send(pointcloud_message, zmq::send_flags::dontwait);
-
-        // Create a JSON message
-        // json message_json;
-        // message_json["hostname"] = pub_hostname;
-        // message_json["width"] = width;
-        // message_json["height"] = height;
-        // message_json["pointcloud"] = pointcloud_data;
-
         // Serialize the message with msgpack
         Pointcloud message;
         message.hostname = pub_hostname;
