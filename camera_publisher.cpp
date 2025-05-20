@@ -8,11 +8,10 @@
 #include <librealsense2/rs.hpp>
 #include <zmq.hpp>
 
-#include <publisher.hpp>
-#include <nlohmann/json.hpp>
+#include "publisher.hpp"
+#include "msgs/pointcloud.hpp"
 
 using namespace std::chrono_literals;
-using json = nlohmann::json;
 
 std::mutex mutex;
 std::atomic<bool> is_stopped(false);
@@ -49,8 +48,8 @@ int main(int argc, char* argv[]) {
     // socket.connect("tcp://" + std::string(server_host) + ":" + std::to_string(server_port));
 
     // Create a publisher
-    Publisher pointcloud_publisher(
-        "PointCloudPublisher", 
+    Publisher<Pointcloud> pointcloud_publisher(
+        "PointcloudPublisher", 
         "tcp://" + std::string(server_host) + ":" + std::to_string(server_port),
         "pointcloud"
     );
@@ -121,14 +120,21 @@ int main(int argc, char* argv[]) {
         // socket.send(pointcloud_message, zmq::send_flags::dontwait);
 
         // Create a JSON message
-        json message_json;
-        message_json["hostname"] = pub_hostname;
-        message_json["width"] = width;
-        message_json["height"] = height;
-        message_json["pointcloud"] = pointcloud_data;
+        // json message_json;
+        // message_json["hostname"] = pub_hostname;
+        // message_json["width"] = width;
+        // message_json["height"] = height;
+        // message_json["pointcloud"] = pointcloud_data;
+
+        // Serialize the message with msgpack
+        Pointcloud message;
+        message.hostname = pub_hostname;
+        message.width = width;
+        message.height = height;
+        message.pointcloud_data = pointcloud_data;
 
         // Publish the messages
-        pointcloud_publisher.publish(message_json);
+        pointcloud_publisher.publish(message);
 
         // Update statistics
         total_frames_sent++;

@@ -22,7 +22,9 @@ add_definitions(${PCL_DEFINITIONS})
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/msgs
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/json/single_include
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/msgpack/include
 )
 
 # Add executables

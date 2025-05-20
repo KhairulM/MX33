@@ -1,9 +1,11 @@
 #include <string>
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <msgpack.hpp>
 
 using json = nlohmann::json;
 
+template<typename T>
 class Publisher {
     std::string mName; // Name of the publisher
     std::string mProxyAddress; // Proxy address written in the format of "tcp://hostname:port"
@@ -41,6 +43,21 @@ class Publisher {
             zmq::message_t zmq_message(message_string.data(), message_string.size());
 
             // Send the message
+            mSocket.send(topic_message, zmq::send_flags::sndmore);
+            mSocket.send(zmq_message, zmq::send_flags::none);
+        }
+
+        void publish(const T& message) {
+            // Serialize the message with msgpack
+            msgpack::sbuffer buffer;
+            msgpack::pack(buffer, message);
+
+            // Create ZMQ message
+            zmq::message_t topic_message(mTopic.data(), mTopic.size());
+            zmq::message_t zmq_message(buffer.size());
+            memcpy(zmq_message.data(), buffer.data(), buffer.size());
+
+            // Publish the message
             mSocket.send(topic_message, zmq::send_flags::sndmore);
             mSocket.send(zmq_message, zmq::send_flags::none);
         }

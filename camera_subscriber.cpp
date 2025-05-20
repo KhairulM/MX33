@@ -10,11 +10,10 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/visualization/cloud_viewer.h>
 
-#include <subscriber.hpp>
-#include <nlohmann/json.hpp>
+#include "subscriber.hpp"
+#include "msgs/pointcloud.hpp"
 
 using namespace std::chrono_literals;
-using json = nlohmann::json;
 
 bool is_stopped = false;
 
@@ -121,7 +120,7 @@ int main(int argc, char* argv[]) {
     pcl::visualization::CloudViewer viewer("Point Cloud Viewer");
 
     // Create a subscriber
-    Subscriber pointcloud_subscriber(
+    Subscriber<Pointcloud> pointcloud_subscriber(
         "PointCloudSubscriber", 
         "tcp://" + std::string(argv[1]) + ":" + std::string(argv[2]),
         "pointcloud"
@@ -164,12 +163,17 @@ int main(int argc, char* argv[]) {
 
         // subscribers[hostname].onPointCloudMessage(pointcloud_message);
 
-        json message_json = pointcloud_subscriber.getMessage();
-        if (message_json.empty()) {
+        // json message_json = pointcloud_subscriber.getMessage();
+        // if (message_json.empty()) {
+        //     continue;
+        // }
+
+        std::unique_ptr<Pointcloud> message = pointcloud_subscriber.getMessageObject();
+        if (!message) {
             continue;
         }
 
-        std::vector<float> pointcloud_data = message_json["pointcloud"];
+        std::vector<float> pointcloud_data = message->pointcloud_data;
         size_t pointcloud_size = pointcloud_data.size();
 
         if (pointcloud_size % 3 != 0) {
@@ -180,8 +184,8 @@ int main(int argc, char* argv[]) {
         // Create a PCL point cloud
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
         size_t n_points = pointcloud_size / 3;
-        cloud->width = message_json["width"];
-        cloud->height = message_json["height"];
+        cloud->width = message->width;
+        cloud->height = message->height;
         cloud->is_dense = false;
         cloud->points.resize(n_points);
 

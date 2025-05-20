@@ -2,12 +2,15 @@
 #include <queue>
 #include <thread>
 #include <mutex>
+#include <memory>
 
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <msgpack.hpp>
 
 using json = nlohmann::json;
 
+template<typename T>
 class Subscriber {
     std::string mName; // Name of the subscriber
     std::string mProxyAddress; // Proxy address written in the format of "tcp://hostname:port"
@@ -84,5 +87,22 @@ class Subscriber {
             // Deserialize the message from string
             json message_json = json::parse(message.to_string());
             return message_json;
+        }
+
+        std::unique_ptr<T> getMessageObject() {
+            std::lock_guard<std::mutex> lock(mMutex);
+            if (mMessages.empty()) {
+                return nullptr;
+            }
+
+            zmq::message_t message = std::move(mMessages.front());
+            mMessages.pop();
+
+            // Deserialize the message with msgpack
+            msgpack::object_handle oh = msgpack::unpack(static_cast<const char*>(message.data()), message.size());
+            T message_data;
+            oh.get().convert(message_data);
+
+            return std::make_unique<T>(message_data);
         }
 };
