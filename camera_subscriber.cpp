@@ -45,8 +45,8 @@ int main(int argc, char* argv[]) {
     // Create a subscriber
     Subscriber<Pointcloud> pointcloud_subscriber(
         "PointCloudSubscriber", 
-        "tcp://" + std::string(argv[1]) + ":" + std::string(argv[2]),
-        std::string(argv[3])
+        "tcp://" + std::string(argv[2]) + ":" + std::string(argv[3]),
+        std::string(argv[1])
     );
 
     // Statistics
@@ -54,8 +54,8 @@ int main(int argc, char* argv[]) {
     int total_frames_received = 0;
     int frame_count = 0;
     auto start_time = std::chrono::steady_clock::now();
-    
-    std::cout << "Connected to broker at tcp://" + std::string(argv[1]) + ":" + std::string(argv[2]) << std::endl;
+
+    std::cout << "Connected to broker at tcp://" + std::string(argv[2]) + ":" + std::string(argv[3]) << std::endl;
     std::cout << "Server started, waiting for messages..." << std::endl;
 
     while (!is_stopped) {

@@ -43,14 +43,14 @@ int main(int argc, char* argv[]) {
     gethostname(pub_hostname, 1024);
     std::cout << "Hostname: " << pub_hostname << std::endl;
 
-    const char* server_host = argv[1]; // Server hostname
-    const int server_port = atoi(argv[2]); // Server port
+    const char* server_host = argv[2]; // Server hostname
+    const int server_port = atoi(argv[3]); // Server port
 
     // Create a publisher
     Publisher<Pointcloud> pointcloud_publisher(
         "PointcloudPublisher", 
         "tcp://" + std::string(server_host) + ":" + std::to_string(server_port),
-        std::string(argv[3])
+        std::string(argv[1])
     );
 
     // Configure RealSense camera
