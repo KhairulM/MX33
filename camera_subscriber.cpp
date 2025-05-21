@@ -46,7 +46,8 @@ int main(int argc, char* argv[]) {
     Subscriber<Pointcloud> pointcloud_subscriber(
         "PointCloudSubscriber", 
         "tcp://" + std::string(argv[2]) + ":" + std::string(argv[3]),
-        std::string(argv[1])
+        std::string(argv[1]),
+        "/home/control/Work/MX33/curve/broker_pub.key"
     );
 
     // Statistics

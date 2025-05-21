@@ -1,4 +1,6 @@
+#include <iostream>
 #include <string>
+#include <fstream>
 #include <queue>
 #include <thread>
 #include <mutex>
@@ -12,6 +14,10 @@ class Subscriber {
     std::string mName; // Name of the subscriber
     std::string mProxyAddress; // Proxy address written in the format of "tcp://hostname:port"
     std::string mTopic; // Topic to subscribe to
+    char broker_public_key[41]; // Public key for the broker
+    char public_key[41]; // Public key for the subscriber
+    char secret_key[41]; // Secret key for the subscriber
+
     zmq::context_t mContext;
     zmq::socket_t mSocket;
     
@@ -42,7 +48,7 @@ class Subscriber {
 
     public:
         // Constructor
-        Subscriber(std::string name, std::string proxy_address, std::string topic, int max_queue_size = 45) {
+        Subscriber(std::string name, std::string proxy_address, std::string topic, std::string broker_public_key_path = "", int max_queue_size = 45) {
             mName = name;
             mProxyAddress = proxy_address;
             mTopic = topic;
@@ -50,9 +56,25 @@ class Subscriber {
             
             mContext = zmq::context_t(1);
             mSocket = zmq::socket_t(mContext, ZMQ_SUB);
+
+            if (!broker_public_key_path.empty()) {
+                std::ifstream pub_file(broker_public_key_path);
+                if (pub_file.is_open()) {
+                    pub_file >> broker_public_key;
+                    zmq_curve_keypair(public_key, secret_key);
+
+                    mSocket.set(zmq::sockopt::curve_serverkey, broker_public_key);
+                    mSocket.set(zmq::sockopt::curve_publickey, public_key);
+                    mSocket.set(zmq::sockopt::curve_secretkey, secret_key);
+                } else {
+                    std::cerr << "Error reading broker public key file.\n";
+                }
+            }
+
+            
             mSocket.connect(mProxyAddress);
             mSocket.set(zmq::sockopt::subscribe, mTopic);
-
+            
             mThread = std::thread(&Subscriber::processZMQMessage, this);
         }
 

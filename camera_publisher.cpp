@@ -50,7 +50,8 @@ int main(int argc, char* argv[]) {
     Publisher<Pointcloud> pointcloud_publisher(
         "PointcloudPublisher", 
         "tcp://" + std::string(server_host) + ":" + std::to_string(server_port),
-        std::string(argv[1])
+        std::string(argv[1]),
+        "/home/control/Work/MX33/curve/broker_pub.key"
     );
 
     // Configure RealSense camera

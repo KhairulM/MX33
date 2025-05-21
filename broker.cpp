@@ -1,4 +1,4 @@
-#include <broker.hpp>
+#include "broker.hpp"
 
 int main(int argc, char* argv[]) {
     char* frontend_port;
@@ -19,7 +19,11 @@ int main(int argc, char* argv[]) {
     std::string backend_address = "tcp://*:" + std::string(backend_port);
 
     // Create a new Broker instance
-    Broker broker(frontend_address, backend_address);
+    Broker broker(
+        frontend_address, 
+        backend_address, 
+        "/home/control/Work/MX33/curve/broker_secret.key"
+    );
 
     // Run the broker
     broker.run();
