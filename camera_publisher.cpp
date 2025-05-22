@@ -44,14 +44,14 @@ int main(int argc, char* argv[]) {
     std::cout << "Hostname: " << pub_hostname << std::endl;
 
     const char* server_host = argv[2]; // Server hostname
-    const int server_port = atoi(argv[3]); // Server port
+    const char* server_port = argv[3]; // Server port
 
     // Create a publisher
     Publisher<Pointcloud> pointcloud_publisher(
         "PointcloudPublisher", 
-        "tcp://" + std::string(server_host) + ":" + std::to_string(server_port),
+        "tcp://" + std::string(server_host) + ":" + std::string(server_port),
         std::string(argv[1]),
-        "/home/control/Work/MX33/curve/broker_pub.key"
+        "/home/khairulmakirin/Works/kaist/mx33-camera-pubsub/curve/broker_pub.key"
     );
 
     // Configure RealSense camera
