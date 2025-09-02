@@ -1,3 +1,6 @@
+#ifndef PUBLISHER_HPP
+#define PUBLISHER_HPP
+
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -65,3 +68,5 @@ class Publisher {
         }
 
 };
+
+#endif // PUBLISHER_HPP

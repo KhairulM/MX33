@@ -1,3 +1,6 @@
+#ifndef SUBSCRIBER_HPP
+#define SUBSCRIBER_HPP
+
 #include <iostream>
 #include <string>
 #include <fstream>
@@ -104,3 +107,5 @@ class Subscriber {
             return std::make_unique<T>(message_data);
         }
 };
+
+#endif // SUBSCRIBER_HPP
