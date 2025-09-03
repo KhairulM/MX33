@@ -30,6 +30,8 @@ include_directories(
 # Add executables
 add_executable(camera_publisher camera_publisher.cpp)
 add_executable(camera_subscriber camera_subscriber.cpp)
+add_executable(demo_service_server demo_service_server.cpp)
+add_executable(demo_service_client demo_service_client.cpp)
 add_executable(broker broker.cpp)
 
 # Link libraries
@@ -47,5 +49,15 @@ target_link_libraries(
 
 target_link_libraries(
     broker
+    cppzmq
+)
+
+target_link_libraries(
+    demo_service_server
+    cppzmq
+)
+
+target_link_libraries(
+    demo_service_client
     cppzmq
 )
