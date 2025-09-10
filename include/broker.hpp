@@ -8,69 +8,84 @@
 #include <sstream>
 #include <string>
 #include <map>
-#include <future>
 #include <thread>
+#include <atomic>
+#include <mutex>
+#include <chrono>
 
 
 class Broker {
     std::string mFrontendAddress, mBackendAddress;
     std::string mServiceNameRegistryLookupAddress, mServiceNameRegistryAddAddress;
     std::map<std::string, std::string> mServiceNameRegistry;
+    std::mutex mRegistryMutex; // protect mServiceNameRegistry
 
-    char private_key[41];
+    std::atomic<bool> mRunning{true};
+
+    char private_key[41] = {0};
 
     public:
         Broker(
-            std::string frontend_address, 
-            std::string backend_address, 
+            std::string frontend_address,
+            std::string backend_address,
             std::string service_name_registry_lookup_address,
             std::string service_name_registry_add_address,
             std::string secret_key_path = ""
-        ) {
-            mFrontendAddress = frontend_address;
-            mBackendAddress = backend_address;
-            mServiceNameRegistryLookupAddress = service_name_registry_lookup_address;
-            mServiceNameRegistryAddAddress = service_name_registry_add_address;
-
-            if (secret_key_path.empty()) {
-                return;
-            }
-
-            std::ifstream secret_file(secret_key_path);
-
-            if (secret_file.is_open()) {
-                secret_file >> private_key;
-            } else {
-                std::cerr << "Error reading key file.\n";
+        ) :
+            mFrontendAddress(std::move(frontend_address)),
+            mBackendAddress(std::move(backend_address)),
+            mServiceNameRegistryLookupAddress(std::move(service_name_registry_lookup_address)),
+            mServiceNameRegistryAddAddress(std::move(service_name_registry_add_address))
+        {
+            if (!secret_key_path.empty()) {
+                std::ifstream secret_file(secret_key_path);
+                if (secret_file.is_open()) {
+                    secret_file >> private_key;
+                } else {
+                    std::cerr << "Error reading key file.\n";
+                }
             }
         }
 
+        void stop() { mRunning = false; }
+        bool isRunning() const { return mRunning.load(); }
 
         void run() {
-            // Create a ZMQ context
             zmq::context_t context(1);
 
             std::cout << "Broker:" << std::endl;
-            std::cout << "  Frontend address: " << mFrontendAddress.c_str() << std::endl;
-            std::cout << "  Backend address: " << mBackendAddress.c_str() << std::endl;
-            std::cout << "  Service name registry lookup address: " << mServiceNameRegistryLookupAddress.c_str() << std::endl;
-            std::cout << "  Service name registry modify address: " << mServiceNameRegistryAddAddress.c_str() << std::endl;
+            std::cout << "  Frontend address: " << mFrontendAddress << std::endl;
+            std::cout << "  Backend address: " << mBackendAddress << std::endl;
+            std::cout << "  Service name registry lookup address: " << mServiceNameRegistryLookupAddress << std::endl;
+            std::cout << "  Service name registry modify address: " << mServiceNameRegistryAddAddress << std::endl;
 
-            // Run the forwarder and the service name registry in separate threads
-            auto thread1 = std::async(std::launch::async, &Broker::runForwarder, this, std::ref(context));
-            auto thread2 = std::async(std::launch::async, &Broker::runServiceNameRegistryLookup, this, std::ref(context));
-            auto thread3 = std::async(std::launch::async, &Broker::runServiceNameRegistryModify, this, std::ref(context)); // updated to modify
+            std::thread tForwarder(&Broker::runForwarder, this, std::ref(context));
+            std::thread tLookup(&Broker::runServiceNameRegistryLookup, this, std::ref(context));
+            std::thread tModify(&Broker::runServiceNameRegistryModify, this, std::ref(context));
 
-            thread1.wait();
-            thread2.wait();
-            thread3.wait();
+            // Wait for the threads to finish (they end when stop() is called)
+            tForwarder.join();
+            tLookup.join();
+            tModify.join();
 
             context.shutdown();
             context.close();
         }
 
+    private:
+        void forwardMultipart(zmq::socket_t &from, zmq::socket_t &to) {
+            while (true) {
+                zmq::message_t msg;
+                if (!from.recv(msg, zmq::recv_flags::none)) {
+                    return; // interrupted/failed
+                }
+                bool more = from.get(zmq::sockopt::rcvmore);
+                to.send(msg, more ? zmq::send_flags::sndmore : zmq::send_flags::none);
+                if (!more) break;
+            }
+        }
+
         void runForwarder(zmq::context_t& context) {
-            // Create a ZMQ socket for the frontend (The one that will receive messages from subscribers)
             zmq::socket_t frontend(context, ZMQ_XSUB);
             if (private_key[0] != '\0') {
                 frontend.set(zmq::sockopt::curve_server, 1);
@@ -78,71 +93,82 @@ class Broker {
             }
             frontend.bind(mFrontendAddress);
 
-            // Create a ZMQ socket for the backend (The one that will send messages to publishers)
             zmq::socket_t backend(context, ZMQ_XPUB);
             if (private_key[0] != '\0') {
                 backend.set(zmq::sockopt::curve_server, 1);
                 backend.set(zmq::sockopt::curve_secretkey, private_key);
             }
             backend.bind(mBackendAddress);
-            
-            std::cout << "Broker started, XSUB: " << mFrontendAddress << ", XPUB:  " << mBackendAddress << std::endl;
 
-            // Start the proxy
-            zmq::proxy(frontend, backend);
+            // Manual proxy loop so we can terminate gracefully
+            while (mRunning.load()) {
+                zmq::pollitem_t items[] = {
+                    { static_cast<void*>(frontend), 0, ZMQ_POLLIN, 0 },
+                    { static_cast<void*>(backend), 0, ZMQ_POLLIN, 0 }
+                };
+                // poll with timeout to check mRunning periodically
+                try {
+                    zmq::poll(items, 2, std::chrono::milliseconds(100));
+                } catch (const zmq::error_t &e) {
+                    if (!mRunning.load()) break; // likely interrupted
+                    std::cerr << "poll error: " << e.what() << std::endl;
+                }
 
-            // Close the sockets
+                if (items[0].revents & ZMQ_POLLIN) {
+                    forwardMultipart(frontend, backend);
+                }
+                if (items[1].revents & ZMQ_POLLIN) {
+                    forwardMultipart(backend, frontend);
+                }
+            }
+
             frontend.close();
             backend.close();
+            std::cout << "Forwarder thread exiting" << std::endl;
         }
 
         void runServiceNameRegistryLookup(zmq::context_t& context) {
-            // Create a REP socket to accepts requests for service names
             zmq::socket_t serviceRegistrySocket(context, ZMQ_REP);
             serviceRegistrySocket.bind(mServiceNameRegistryLookupAddress);
 
-            while (true) {
+            while (mRunning.load()) {
                 zmq::message_t request;
                 if (!serviceRegistrySocket.recv(request, zmq::recv_flags::dontwait)) {
-                    // If no message is received, continue the loop
-                    std::this_thread::yield();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
                     continue;
                 }
                 std::string service_name(static_cast<char*>(request.data()), request.size());
 
-                // Look up the service name in the registry
-                auto it = mServiceNameRegistry.find(service_name);
-                if (it != mServiceNameRegistry.end()) {
-                    // If found, send the address back to the requester
-                    zmq::message_t reply(it->second.data(), it->second.size());
+                std::string address;
+                {
+                    std::lock_guard<std::mutex> lock(mRegistryMutex);
+                    auto it = mServiceNameRegistry.find(service_name);
+                    if (it != mServiceNameRegistry.end()) address = it->second;
+                }
+                if (!address.empty()) {
+                    zmq::message_t reply(address.data(), address.size());
                     serviceRegistrySocket.send(reply, zmq::send_flags::none);
                 } else {
-                    // If not found, send an empty reply
-                    zmq::message_t reply;
+                    zmq::message_t reply; // empty
                     serviceRegistrySocket.send(reply, zmq::send_flags::none);
                 }
             }
-
-            // Close the socket
             serviceRegistrySocket.close();
+            std::cout << "Lookup thread exiting" << std::endl;
         }
 
         void runServiceNameRegistryModify(zmq::context_t& context) {
-            // Create a REP socket to accept modify requests for service names
             zmq::socket_t serviceRegistrySocket(context, ZMQ_REP);
             serviceRegistrySocket.bind(mServiceNameRegistryAddAddress);
 
-            while (true) {
+            while (mRunning.load()) {
                 zmq::message_t registration;
                 if (!serviceRegistrySocket.recv(registration, zmq::recv_flags::dontwait)) {
-                    // If no message is received, continue the loop
-                    std::this_thread::yield();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
                     continue;
                 }
 
                 std::string registration_str(static_cast<char*>(registration.data()), registration.size());
-
-                // Parse: expected "REGISTER <service_name> <address>" or "UNREGISTER <service_name>"
                 std::istringstream iss(registration_str);
                 std::string cmd;
                 iss >> cmd;
@@ -152,18 +178,24 @@ class Broker {
                     std::string address_str;
                     iss >> service_name_str >> address_str;
                     if (!service_name_str.empty() && !address_str.empty()) {
-                        mServiceNameRegistry[service_name_str] = address_str;
+                        {
+                            std::lock_guard<std::mutex> lock(mRegistryMutex);
+                            mServiceNameRegistry[service_name_str] = address_str;
+                        }
                         std::cout << "Registered service: " << service_name_str << " at " << address_str << std::endl;
                     } else {
                         std::cerr << "Malformed REGISTER message: '" << registration_str << "'" << std::endl;
                     }
                 } else if (cmd == "UNREGISTER") {
-                    std::string service_name_str;
-                    iss >> service_name_str;
+                    std::string service_name_str; iss >> service_name_str;
                     if (!service_name_str.empty()) {
-                        auto it = mServiceNameRegistry.find(service_name_str);
-                        if (it != mServiceNameRegistry.end()) {
-                            mServiceNameRegistry.erase(it);
+                        bool erased = false;
+                        {
+                            std::lock_guard<std::mutex> lock(mRegistryMutex);
+                            auto it = mServiceNameRegistry.find(service_name_str);
+                            if (it != mServiceNameRegistry.end()) { mServiceNameRegistry.erase(it); erased = true; }
+                        }
+                        if (erased) {
                             std::cout << "Unregistered service: " << service_name_str << std::endl;
                         } else {
                             std::cout << "Service to unregister not found: " << service_name_str << std::endl;
@@ -175,13 +207,11 @@ class Broker {
                     std::cerr << "Unknown service name registry command: '" << registration_str << "'" << std::endl;
                 }
 
-                // Send an empty reply
-                zmq::message_t reply;
+                zmq::message_t reply; // empty ack
                 serviceRegistrySocket.send(reply, zmq::send_flags::none);
             }
-
-            // Close the socket
             serviceRegistrySocket.close();
+            std::cout << "Modify thread exiting" << std::endl;
         }
 };
 

@@ -1,4 +1,15 @@
 #include "broker.hpp"
+#include <csignal>
+#include <atomic>
+
+static Broker* gBrokerInstance = nullptr;
+
+void handleSigInt(int){
+    if (gBrokerInstance) {
+        std::cout << "\nSIGINT received, shutting down broker..." << std::endl;
+        gBrokerInstance->stop();
+    }
+}
 
 int main(int argc, char* argv[]) {
     char* frontend_port = "5555"; // Default frontend port
@@ -20,7 +31,9 @@ int main(int argc, char* argv[]) {
         // "/home/control/Work/MX33/curve/broker_secret.key"
     );
 
-    // Run the broker
+    gBrokerInstance = &broker;
+    std::signal(SIGINT, handleSigInt);
+
     broker.run();
     
     return 0;
