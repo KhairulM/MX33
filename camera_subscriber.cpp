@@ -57,7 +57,8 @@ int main(int argc, char* argv[]) {
     auto start_time = std::chrono::steady_clock::now();
 
     std::cout << "Connected to broker at tcp://" + std::string(argv[2]) + ":" + std::string(argv[3]) << std::endl;
-    std::cout << "Server started, waiting for messages..." << std::endl;
+    std::cout << "Subscribed to topic: " << argv[1] << std::endl;
+    std::cout << "Waiting for messages..." << std::endl;
 
     while (!stop) {
         std::unique_ptr<Pointcloud> message = pointcloud_subscriber.getMessageObject();

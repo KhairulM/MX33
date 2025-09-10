@@ -67,6 +67,7 @@ int main(int argc, char* argv[]) {
     
     std::cout << "Initializing camera with resolution: " << resolution_width << "x" << resolution_height << std::endl;
     std::cout << "Sending pointcloud data of size: " <<  (resolution_width/decimation_magnitude) << "x" << (resolution_height/decimation_magnitude) << ", " << (resolution_width/decimation_magnitude) * (resolution_height/decimation_magnitude) * 3 * sizeof(float) << " bytes" << std::endl;
+    std::cout << "To topic: " << argv[1] << std::endl;
     std::cout << "Server address: tcp://" << server_host << ":" << server_port << std::endl;
     
     // Statistics
