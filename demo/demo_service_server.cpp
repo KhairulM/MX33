@@ -1,7 +1,7 @@
 #include <csignal>
 
-#include "srvs/string.hpp"
 #include "server.hpp"
+#include "../srvs/string.hpp"
 
 int main() {
     Server<String::Request, String::Response> server(

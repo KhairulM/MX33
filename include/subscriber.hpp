@@ -90,7 +90,7 @@ class Subscriber {
             }
         }
 
-        std::unique_ptr<T> getMessageObject() {
+        std::unique_ptr<T> getMessageObjectPtr() {
             std::lock_guard<std::mutex> lock(mMutex);
             if (mMessages.empty()) {
                 return nullptr;

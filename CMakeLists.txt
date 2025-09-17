@@ -23,41 +23,52 @@ add_definitions(${PCL_DEFINITIONS})
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/msgs
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/json/single_include
+    ${CMAKE_CURRENT_SOURCE_DIR}/srvs
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/msgpack/include
 )
 
 # Add executables
-add_executable(camera_publisher camera_publisher.cpp)
-add_executable(camera_subscriber camera_subscriber.cpp)
-add_executable(demo_service_server demo_service_server.cpp)
-add_executable(demo_service_client demo_service_client.cpp)
+option(BUILD_EXAMPLES "Build example applications" ON)
+if(BUILD_EXAMPLES)
+    add_executable(camera_publisher demo/camera_publisher.cpp)
+    add_executable(camera_subscriber demo/camera_subscriber.cpp)
+    add_executable(demo_service_server demo/demo_service_server.cpp)
+    add_executable(demo_service_client demo/demo_service_client.cpp)
+    
+    # Link libraries
+    target_link_libraries(
+        camera_publisher
+        realsense2
+        cppzmq
+    )
+    target_link_libraries(
+        camera_subscriber
+        cppzmq
+        ${PCL_LIBRARIES}
+    )
+
+    target_link_libraries(
+        demo_service_server
+        cppzmq
+    )
+
+    target_link_libraries(
+        demo_service_client
+        cppzmq
+    )
+
+endif()
+
 add_executable(broker broker.cpp)
-
-# Link libraries
-target_link_libraries(
-    camera_publisher
-    realsense2
-    cppzmq
-)
-
-target_link_libraries(
-    camera_subscriber
-    cppzmq
-    ${PCL_LIBRARIES}
-)
-
 target_link_libraries(
     broker
     cppzmq
 )
 
+add_executable(map_server map_server.cpp)
 target_link_libraries(
-    demo_service_server
+    map_server
     cppzmq
-)
-
-target_link_libraries(
-    demo_service_client
-    cppzmq
+    ${PCL_LIBRARIES}
 )

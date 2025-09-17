@@ -11,7 +11,7 @@
 #include <pcl/visualization/cloud_viewer.h>
 
 #include "subscriber.hpp"
-#include "msgs/pointcloud.hpp"
+#include "../msgs/pointcloud.hpp"
 
 using namespace std::chrono_literals;
 
@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Waiting for messages..." << std::endl;
 
     while (!stop) {
-        std::unique_ptr<Pointcloud> message = pointcloud_subscriber.getMessageObject();
+        std::unique_ptr<Pointcloud> message = pointcloud_subscriber.getMessageObjectPtr();
         if (message) {
             std::vector<float> pointcloud_data = message->pointcloud_data;
             size_t pointcloud_size = pointcloud_data.size();

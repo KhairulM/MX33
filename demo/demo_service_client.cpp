@@ -1,6 +1,6 @@
 #include <iostream>
-#include "srvs/string.hpp"
-#include "include/client.hpp" // relative include path; adjust if needed
+#include "client.hpp" // relative include path; adjust if needed
+#include "../srvs/string.hpp"
 
 int main() {
     // NOTE: set this to your broker's service-name-lookup REP endpoint

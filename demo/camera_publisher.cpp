@@ -9,7 +9,7 @@
 #include <zmq.hpp>
 
 #include "publisher.hpp"
-#include "msgs/pointcloud.hpp"
+#include "../msgs/pointcloud.hpp"
 
 using namespace std::chrono_literals;
 
@@ -108,7 +108,6 @@ int main(int argc, char* argv[]) {
         
         // Serialize the message with msgpack
         Pointcloud message;
-        message.hostname = pub_hostname;
         message.width = width;
         message.height = height;
         message.pointcloud_data = pointcloud_data;

@@ -12,6 +12,9 @@
 #include <zmq.hpp>
 #include <msgpack.hpp>
 
+// Utils (relative to this header's directory)
+#include "../utils/get_local_ip.hpp"
+
 // Change: Server now takes Request and Response types
 template<typename Request, typename Response>
 class Server {
@@ -37,15 +40,15 @@ class Server {
         Server(
             std::string name, 
             std::string proxy_address, 
-            std::string service_name, 
-            std::string service_ip_addr = "*",
-            std::string service_port = "0",
+            std::string service_name,
+            std::string server_ip_address = "",
+            std::string service_port = "0", // use ephemeral port by default 
             std::string broker_public_key_path = "") {
             nName = name;
             mRegistryAddress = proxy_address;
             mServiceName = service_name;
-            mServiceIpAddress = service_ip_addr;
-            mServicePort = service_port;
+            mServiceIpAddress = get_local_ip();
+            mServicePort = service_port; // use ephemeral port by default
 
             mContext = zmq::context_t(1);
             mRepSocket = zmq::socket_t(mContext, ZMQ_REP);
@@ -101,7 +104,6 @@ class Server {
             std::cout << "Registered service " << mServiceName << " at " << mServiceAddress << std::endl;
         }
 
-        // New: unregister the service from the broker (sends "UNREGISTER <service_name>")
         void unregisterService() {
             if (mServiceName.empty() || mRegistryAddress.empty()) {
                 return; // nothing to unregister
