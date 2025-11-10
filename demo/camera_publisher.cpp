@@ -122,18 +122,16 @@ int main(int argc, char* argv[]) {
     // };
     
     // camera_pipeline.start(config, cameraCallback);
+    
+    // Serialize the message with msgpack
+    Pointcloud message;
+    message.width = resolution_width / decimation_magnitude;
+    message.height = resolution_height / decimation_magnitude;
+    // Generate random pointcloud data
+    std::vector<float> pointcloud_data(message.width * message.height * 3);
+    message.pointcloud_data = pointcloud_data;
 
     while (!is_stopped) {
-        // Serialize the message with msgpack
-        Pointcloud message;
-        message.width = 640;
-        message.height = 480;
-        // Generate random pointcloud data
-        std::vector<float> pointcloud_data(message.width * message.height * 3);
-        for (size_t i = 0; i < pointcloud_data.size(); i++) {
-            pointcloud_data[i] = static_cast<float>(rand()) / RAND_MAX * 10.0f - 5.0f; // Random values between -5 and 5
-        }
-        message.pointcloud_data = pointcloud_data;
 
         // Publish the messages
         pointcloud_publisher.publish(message);
@@ -142,7 +140,7 @@ int main(int argc, char* argv[]) {
         total_frames_sent++;
         frame_count++;
 
-        std::this_thread::sleep_for(66ms); // Simulate camera frame rate (15 FPS)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / camera_fps)); // Simulate camera frame rate (15 FPS)
 
         // Update statistics
         auto now = std::chrono::steady_clock::now();
