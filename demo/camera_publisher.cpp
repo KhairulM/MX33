@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <atomic>
 
-#include <librealsense2/rs.hpp>
+// #include <librealsense2/rs.hpp>
 #include <zmq.hpp>
 
 #include "publisher.hpp"
@@ -60,10 +60,10 @@ int main(int argc, char* argv[]) {
     const int decimation_magnitude = 8; // Decimation filter magnitude
     const int camera_fps = 15; // Camera frames per second
 
-    rs2::pipeline camera_pipeline;
-    rs2::config config;
-    rs2::decimation_filter decimation_filter(decimation_magnitude);
-    config.enable_stream(RS2_STREAM_DEPTH, resolution_width, resolution_height, RS2_FORMAT_Z16, camera_fps); // Enable depth stream
+    // rs2::pipeline camera_pipeline;
+    // rs2::config config;
+    // rs2::decimation_filter decimation_filter(decimation_magnitude);
+    // config.enable_stream(RS2_STREAM_DEPTH, resolution_width, resolution_height, RS2_FORMAT_Z16, camera_fps); // Enable depth stream
     
     std::cout << "Initializing camera with resolution: " << resolution_width << "x" << resolution_height << std::endl;
     std::cout << "Sending pointcloud data of size: " <<  (resolution_width/decimation_magnitude) << "x" << (resolution_height/decimation_magnitude) << ", " << (resolution_width/decimation_magnitude) * (resolution_height/decimation_magnitude) * 3 * sizeof(float) << " bytes" << std::endl;
@@ -77,39 +77,61 @@ int main(int argc, char* argv[]) {
     auto start_time = std::chrono::steady_clock::now();
 
     // Realsense callback function
-    auto cameraCallback = [&](const rs2::frame& frame) {
-        // Check if stopped
-        if (is_stopped) return;
+    // auto cameraCallback = [&](const rs2::frame& frame) {
+    //     // Check if stopped
+    //     if (is_stopped) return;
         
-        // Check if it's a synchronized frame or not
-        rs2::frameset frameset = frame.as<rs2::frameset>();
-        if (!frameset) return;
+    //     // Check if it's a synchronized frame or not
+    //     rs2::frameset frameset = frame.as<rs2::frameset>();
+    //     if (!frameset) return;
         
-        // Check if depth frame is available
-        rs2::depth_frame depth_frame = frameset.get_depth_frame();
-        if (!depth_frame) return;
+    //     // Check if depth frame is available
+    //     rs2::depth_frame depth_frame = frameset.get_depth_frame();
+    //     if (!depth_frame) return;
         
-        // Decimate the depth frame
-        rs2::frame decimated_depth = decimation_filter.process(depth_frame);
-        depth_frame = decimated_depth.as<rs2::depth_frame>();
+    //     // Decimate the depth frame
+    //     rs2::frame decimated_depth = decimation_filter.process(depth_frame);
+    //     depth_frame = decimated_depth.as<rs2::depth_frame>();
         
-        int width = depth_frame.get_width();
-        int height = depth_frame.get_height();
-        int size = width * height;
+    //     int width = depth_frame.get_width();
+    //     int height = depth_frame.get_height();
+    //     int size = width * height;
         
-        // Get the pointcloud data
-        rs2::pointcloud pc;
-        rs2::points points = pc.calculate(depth_frame);
+    //     // Get the pointcloud data
+    //     rs2::pointcloud pc;
+    //     rs2::points points = pc.calculate(depth_frame);
         
-        // Flatten the pointcloud data
-        const rs2::vertex* vertices = points.get_vertices();
-        std::vector<float> pointcloud_data(size * 3);
-        memcpy(pointcloud_data.data(), vertices, size * 3 * sizeof(float));
+    //     // Flatten the pointcloud data
+    //     const rs2::vertex* vertices = points.get_vertices();
+    //     std::vector<float> pointcloud_data(size * 3);
+    //     memcpy(pointcloud_data.data(), vertices, size * 3 * sizeof(float));
         
+    //     // Serialize the message with msgpack
+    //     Pointcloud message;
+    //     message.width = width;
+    //     message.height = height;
+    //     message.pointcloud_data = pointcloud_data;
+
+    //     // Publish the messages
+    //     pointcloud_publisher.publish(message);
+
+    //     // Update statistics
+    //     total_frames_sent++;
+    //     frame_count++;
+    // };
+    
+    // camera_pipeline.start(config, cameraCallback);
+
+    while (!is_stopped) {
         // Serialize the message with msgpack
         Pointcloud message;
-        message.width = width;
-        message.height = height;
+        message.width = 640;
+        message.height = 480;
+        // Generate random pointcloud data
+        std::vector<float> pointcloud_data(message.width * message.height * 3);
+        for (size_t i = 0; i < pointcloud_data.size(); i++) {
+            pointcloud_data[i] = static_cast<float>(rand()) / RAND_MAX * 10.0f - 5.0f; // Random values between -5 and 5
+        }
         message.pointcloud_data = pointcloud_data;
 
         // Publish the messages
@@ -118,11 +140,9 @@ int main(int argc, char* argv[]) {
         // Update statistics
         total_frames_sent++;
         frame_count++;
-    };
-    
-    camera_pipeline.start(config, cameraCallback);
 
-    while (!is_stopped) {
+        std::this_thread::sleep_for(66ms); // Simulate camera frame rate (15 FPS)
+
         // Update statistics
         auto now = std::chrono::steady_clock::now();
         if (now - start_time >= statistic_interval) {
@@ -136,7 +156,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    camera_pipeline.stop();
+    // camera_pipeline.stop();
 
     std::cout << "\nTotal frames sent: " << total_frames_sent << std::endl;
 
