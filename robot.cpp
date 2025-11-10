@@ -62,15 +62,15 @@ public:
                 req.ip_address = "unknown";
             }
 
-            std::cout << "Registering robot " << robot_id << " with IP " << req.ip_address << std::endl;
+            std::cout << "[Robot " << robot_id << "] Registering robot " << robot_id << " with IP " << req.ip_address << std::endl;
 
             RegisterRobot::Response resp = register_client->call(req);
 
-            std::cout << "Registration response: " << resp.message << std::endl;
+            std::cout << "[Robot " << robot_id << "] Registration response: " << resp.message << std::endl;
             return resp.success;
 
         } catch (const std::exception& e) {
-            std::cerr << "Failed to register robot: " << e.what() << std::endl;
+            std::cerr << "[Robot " << robot_id << "] Failed to register robot: " << e.what() << std::endl;
             return false;
         }
     }
@@ -83,52 +83,51 @@ public:
         std::mt19937 gen(rd());
         std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
 
-        while (true) {
-            PointcloudTF msg;
-            msg.robot_id = robot_id;
+        PointcloudTF msg;
+        msg.robot_id = robot_id;
 
-            // Create dummy pointcloud (100x100 points)
-            int width = 100;
-            int height = 100;
-            msg.pointcloud.width = width;
-            msg.pointcloud.height = height;
-            msg.pointcloud.pointcloud_data.resize(width * height * 3);
+        // Create dummy pointcloud (100x100 points) in the base_link frame
+        int width = 100;
+        int height = 100;
+        msg.pointcloud.width = width;
+        msg.pointcloud.height = height;
+        msg.pointcloud.pointcloud_data.resize(width * height * 3);
 
-            // Fill with random points
-            for (int i = 0; i < width * height * 3; i++) {
-                msg.pointcloud.pointcloud_data[i] = dis(gen);
-            }
-
-            // Set transform from local (robot base) to camera frame
-            // For demo: camera is 0.5m forward, 0.2m up from robot base, no rotation
-            msg.local_to_camera_transform.x = 0.5f;
-            msg.local_to_camera_transform.y = 0.0f;
-            msg.local_to_camera_transform.z = 0.2f;
-            msg.local_to_camera_transform.qx = 0.0f;
-            msg.local_to_camera_transform.qy = 0.0f;
-            msg.local_to_camera_transform.qz = 0.0f;
-            msg.local_to_camera_transform.qw = 1.0f; // Identity rotation
-
-            // Publish the pointcloud
-            pointcloud_publisher->publish(msg);
-            std::cout << "Published pointcloud from robot " << robot_id << std::endl;
-
-            // Publish at 1 Hz
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        // Fill with random points
+        for (int i = 0; i < width * height * 3; i++) {
+            msg.pointcloud.pointcloud_data[i] = dis(gen);
         }
-    }
 
+        // Set transform from odom frame to base link (robot) frame. This is the current pose of the robot.
+        msg.odom_to_base_link_transform.x = 0.5f;
+        msg.odom_to_base_link_transform.y = 0.0f;
+        msg.odom_to_base_link_transform.z = 0.2f;
+        msg.odom_to_base_link_transform.qx = 0.0f;
+        msg.odom_to_base_link_transform.qy = 0.0f;
+        msg.odom_to_base_link_transform.qz = 0.0f;
+        msg.odom_to_base_link_transform.qw = 1.0f; // Identity rotation
+
+        // Publish the pointcloud
+        pointcloud_publisher->publish(msg);
+        std::cout << "[Robot " << robot_id << "] Published pointcloud from robot " << robot_id << std::endl;
+
+    }
+    
     void run() {
         // First, register to the map server
         if (!registerToMapServer()) {
-            std::cerr << "Failed to register robot. Exiting." << std::endl;
+            std::cerr << "[Robot " << robot_id << "] Failed to register robot. Exiting." << std::endl;
             return;
         }
-
-        std::cout << "Robot " << robot_id << " registered successfully. Starting pointcloud publishing..." << std::endl;
-
+        
+        std::cout << "[Robot " << robot_id << "] Registered successfully. Starting pointcloud publishing..." << std::endl;
+        
         // Start publishing pointclouds
-        publishPointcloud();
+        while (true) {
+            publishPointcloud();
+            // Publish at 1 Hz
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
     }
 };
 

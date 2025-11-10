@@ -26,8 +26,8 @@ class MapServer {
 
     std::map<std::string, Robot> robots;
     std::map<std::string, PointcloudTF> robot_pointclouds; // Individual scans for each robot
-    std::map<std::string, Transform> local_to_global_tf; // Map of local to global transformations for each robot
-    
+    std::map<std::string, Transform> global_to_odom_tf; // Map of global to odom transformations for each robot
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr global_map;
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
@@ -57,10 +57,10 @@ class MapServer {
         }
 
         void run() {
-            // Read the local to global transformation file path
+            // Read the global to local transformation file path
             std::ifstream infile(_transformation_file_path);
             if (!infile.is_open()) {
-                std::cout << "No existing transformation file found. Using identity transform for all robots." << std::endl;
+                std::cout << "[MapServer] No existing transformation file found. Using identity transform for all robots." << std::endl;
             } else {
                 // Expected format per line: robot_id    x y z qx qy qz qw
                 // Where (x, y, z) is translation and (qx, qy, qz, qw) is rotation in quaternion, and all is in floating point
@@ -69,8 +69,8 @@ class MapServer {
                 Transform transform;
                 while (infile >> robot_id >> transform.x >> transform.y >> transform.z
                        >> transform.qx >> transform.qy >> transform.qz >> transform.qw) {
-                    local_to_global_tf[robot_id] = transform;
-                    std::cout << "Loaded local to global transformation for robot " << robot_id << " from " << _transformation_file_path << std::endl;
+                    global_to_odom_tf[robot_id] = transform;
+                    std::cout << "[MapServer] Loaded global to odom transformation for robot " << robot_id << " from " << _transformation_file_path << std::endl;
                 }
                 infile.close();
             }
@@ -100,11 +100,11 @@ class MapServer {
                 new_robot.id = req.id;
                 new_robot.ip_address = req.ip_address;
                 new_robot.connected = true; // Mark as connected upon registration
-                new_robot.transform = Transform{0, 0, 0, 0, 0, 0, 1}; // Identity transform
+                new_robot.global_to_odom_transform = Transform{0, 0, 0, 0, 0, 0, 1}; // Identity transform
 
-                // If a local to global transformation exists for this robot, use it
-                if (local_to_global_tf.find(req.id) != local_to_global_tf.end()) {
-                    new_robot.transform = local_to_global_tf[req.id];
+                // If a global to odom transformation exists for this robot, use it
+                if (global_to_odom_tf.find(req.id) != global_to_odom_tf.end()) {
+                    new_robot.global_to_odom_transform = global_to_odom_tf[req.id];
                 }
 
                 {
@@ -113,7 +113,7 @@ class MapServer {
                 }
 
                 res.success = true;
-                res.message = "Robot with ID " + req.id + " registered successfully.";
+                res.message = "[MapServer] Robot with ID " + req.id + " registered successfully.";
                 std::cout << res.message << std::endl;
                 return res;
             });
@@ -126,10 +126,8 @@ class MapServer {
                 auto msg = pointcloud_subscriber.getMessageObjectPtr();
                 if (!msg) continue;
 
-                // Save the Pointcloud and Transformation
+                // Extract robot_id from the message
                 std::string robot_id = msg->robot_id;
-                Pointcloud pointcloud = msg->pointcloud;
-                Transform local_transformation = msg->local_to_camera_transform;
 
                 {
                     std::lock_guard<std::mutex> lk(pointclouds_mutex);
@@ -160,29 +158,31 @@ class MapServer {
                     const std::string& robot_id = it->first;
                     const PointcloudTF& pc_tf = it->second;
                     Pointcloud pointcloud = pc_tf.pointcloud;
-                    Transform local_to_camera = pc_tf.local_to_camera_transform;
+                    Transform odom_to_base_link = pc_tf.odom_to_base_link_transform;
 
                     int pointcloud_width = pointcloud.width;
                     int pointcloud_height = pointcloud.height;
                     const std::vector<float>& pointcloud_data = pointcloud.pointcloud_data;
-
-                    // Get the robot's local to global transformation
-                    Transform local_to_global;
+                    
+                    // Get the robot's global to odom transformation
+                    Transform global_to_odom;
                     {
                         std::lock_guard<std::mutex> lk(robots_mutex);
                         if (robots.find(robot_id) == robots.end()) {
-                            std::cout << "Robot ID " << robot_id << " not found in registered robots." << std::endl;
+                            std::cout << "[MapServer] Robot ID " << robot_id << " not found in registered robots." << std::endl;
                             continue;
                         }
-                        local_to_global = robots[robot_id].transform;
+                        global_to_odom = robots[robot_id].global_to_odom_transform;
                     }
 
-                    // Calculate the transformation from camera frame to global frame
-                    // Points are in camera frame, we need to transform them to global frame
-                    // Transformation chain: camera → local → global
-                    // Combined transform = local_to_global * local_to_camera
-                    // This applies local_to_camera first (camera→local), then local_to_global (local→global)
-                    Transform camera_to_global = local_to_global * local_to_camera;
+                    // Calculate the transformation from base_link frame to global frame
+                    // Points in the pointcloud are in the base_link frame, we need to transform them to global frame
+                    // Transformation chain: base_link → odom → global
+                    // We have: global_to_odom (global→odom) and odom_to_base_link (odom→base_link)
+                    // We need: base_link_to_odom (inverse of odom_to_base_link) and odom_to_global (inverse of global_to_odom)
+                    Transform base_link_to_odom = odom_to_base_link.inverse();
+                    Transform odom_to_global = global_to_odom.inverse();
+                    Transform base_link_to_global = odom_to_global * base_link_to_odom;
 
                     // Transform the pointcloud data using the combined transformation
                     pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointXYZ>());
@@ -192,13 +192,13 @@ class MapServer {
                     transformed_cloud->points.resize(pointcloud_width * pointcloud_height);
 
                     if (pointcloud_data.size() != static_cast<size_t>(pointcloud_width) * static_cast<size_t>(pointcloud_height) * 3) {
-                        std::cout << "Pointcloud size mismatch for robot " << robot_id << std::endl;
+                        std::cout << "[MapServer] Pointcloud size mismatch for robot " << robot_id << std::endl;
                         continue;
                     }
 
                     for (size_t i = 0; i < pointcloud_data.size(); i += 3) {
                         std::array<float,3> p{ pointcloud_data[i], pointcloud_data[i+1], pointcloud_data[i+2] };
-                        auto tp = camera_to_global.transformPoint(p);
+                        auto tp = base_link_to_global.transformPoint(p);
                         auto& dst = transformed_cloud->points[i/3];
                         dst.x = tp[0]; dst.y = tp[1]; dst.z = tp[2];
                     }
@@ -238,9 +238,9 @@ int main(int argc, char* argv[]) {
         broker_public_key_path = argv[3];
     }
 
-    std::cout << "Starting Map Server..." << std::endl;
-    std::cout << "Broker address: " << broker_address << std::endl;
-    std::cout << "Transformation file: " << transformation_file_path << std::endl;
+    std::cout << "[MapServer] Starting Map Server..." << std::endl;
+    std::cout << "[MapServer] Broker address: " << broker_address << std::endl;
+    std::cout << "[MapServer] Transformation file: " << transformation_file_path << std::endl;
 
     MapServer map_server(
         broker_address,

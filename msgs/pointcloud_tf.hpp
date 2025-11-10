@@ -8,7 +8,7 @@
 class PointcloudTF {
     public:
         std::string robot_id;
-        Pointcloud pointcloud;
-        Transform local_to_camera_transform;
-        MSGPACK_DEFINE(robot_id, pointcloud, local_to_camera_transform);
+        Pointcloud pointcloud; // assume in base_link frame
+        Transform odom_to_base_link_transform;
+        MSGPACK_DEFINE(robot_id, pointcloud, odom_to_base_link_transform);
 };

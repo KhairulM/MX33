@@ -53,11 +53,11 @@ class Broker {
         void run() {
             zmq::context_t context(1);
 
-            std::cout << "Broker:" << std::endl;
-            std::cout << "  Frontend address: " << mFrontendAddress << std::endl;
-            std::cout << "  Backend address: " << mBackendAddress << std::endl;
-            std::cout << "  Service name registry lookup address: " << mServiceNameRegistryLookupAddress << std::endl;
-            std::cout << "  Service name registry modify address: " << mServiceNameRegistryAddAddress << std::endl;
+            std::cout << "[Broker] Broker:" << std::endl;
+            std::cout << "[Broker]   Frontend address: " << mFrontendAddress << std::endl;
+            std::cout << "[Broker]   Backend address: " << mBackendAddress << std::endl;
+            std::cout << "[Broker]   Service name registry lookup address: " << mServiceNameRegistryLookupAddress << std::endl;
+            std::cout << "[Broker]   Service name registry modify address: " << mServiceNameRegistryAddAddress << std::endl;
 
             std::thread tForwarder(&Broker::runForwarder, this, std::ref(context));
             std::thread tLookup(&Broker::runServiceNameRegistryLookup, this, std::ref(context));

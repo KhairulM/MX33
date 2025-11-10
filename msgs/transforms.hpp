@@ -70,4 +70,26 @@ class Transform {
 
             return result;
         }
+
+        // Compute the inverse transform
+        // If T transforms A→B, then T.inverse() transforms B→A
+        Transform inverse() const {
+            Transform result;
+
+            // Inverse rotation: conjugate of quaternion (negate x,y,z components)
+            result.qw = qw;
+            result.qx = -qx;
+            result.qy = -qy;
+            result.qz = -qz;
+            result.normalize();
+
+            // Inverse translation: t_inv = -R^(-1) * t = -R^T * t
+            // For unit quaternion, conjugate is the inverse rotation
+            auto t_inv = result.rotateVector({-x, -y, -z});
+            result.x = t_inv[0];
+            result.y = t_inv[1];
+            result.z = t_inv[2];
+
+            return result;
+        }
 };
