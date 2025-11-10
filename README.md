@@ -38,6 +38,15 @@ No need to build, its a header only library. Just be sure to clone the right bra
 sudo apt install libpcl-dev
 ```
 
+## Octomap
+```bash
+cd lib/octomap
+mkdir build && cd build
+cmake ..
+make -j$(($(nproc)-1))
+sudo make install
+```
+
 # Building the Project
 This repository contains implementations for:
 - **Broker**: Message broker for pub/sub and service registry
