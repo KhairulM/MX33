@@ -72,3 +72,10 @@ target_link_libraries(
     cppzmq
     ${PCL_LIBRARIES}
 )
+
+add_executable(robot robot.cpp)
+target_link_libraries(
+    robot
+    cppzmq
+    ${PCL_LIBRARIES}
+)
