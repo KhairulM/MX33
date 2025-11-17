@@ -17,6 +17,10 @@ include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
+# Octomap
+find_package(octomap REQUIRED)
+include_directories(${OCTOMAP_INCLUDE_DIRS})
+
 # NLohhmann JSON
 # find_package(nlohmann_json 3.12.0 REQUIRED)
 
@@ -71,6 +75,7 @@ target_link_libraries(
     map_server
     cppzmq
     ${PCL_LIBRARIES}
+    ${OCTOMAP_LIBRARIES}
 )
 
 add_executable(robot robot.cpp)

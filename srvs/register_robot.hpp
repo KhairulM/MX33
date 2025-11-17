@@ -6,8 +6,9 @@ namespace RegisterRobot {
         public:
             std::string id;
             std::string ip_address;
+            std::string set_goal_topic;
 
-        MSGPACK_DEFINE(id, ip_address);
+        MSGPACK_DEFINE(id, ip_address, set_goal_topic);
     };
 
     class Response {

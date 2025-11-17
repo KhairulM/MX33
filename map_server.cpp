@@ -6,6 +6,9 @@
 #include <mutex>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <octomap/octomap.h>
+#include <octomap/OcTree.h>
+#include <octomap/Pointcloud.h>
 
 // Communication libraries
 #include "robot.hpp"
@@ -26,16 +29,16 @@ class MapServer {
 
     std::map<std::string, Robot> robots;
     std::map<std::string, PointcloudTF> robot_pointclouds; // Individual scans for each robot
-    std::map<std::string, Transform> global_to_odom_tf; // Map of global to odom transformations for each robot
+    std::map<std::string, Transform> global_to_odom_tf; // Global to odom transformations for each robot
 
-    pcl::PointCloud<pcl::PointXYZ>::Ptr global_map;
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr global_map;
+    octomap::OcTree global_map{0.1f}; // OctoMap with 0.1m resolution
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
     Subscriber<PointcloudTF> pointcloud_subscriber;
 
     std::mutex robots_mutex;
     std::mutex pointclouds_mutex;
-    std::mutex global_map_mutex;
 
     // Optional: viewer removed to avoid dependency on PCL visualization
 
@@ -53,7 +56,6 @@ class MapServer {
         , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_address, pointcloud_topic, broker_public_key_path)
         {
             _transformation_file_path = transformation_file_path;
-            global_map.reset(new pcl::PointCloud<pcl::PointXYZ>());
         }
 
         void run() {
@@ -139,13 +141,6 @@ class MapServer {
         void constructGlobalMapThread() {
             // Combine all robots' pointclouds into a global map
             while (true) {
-                {
-                    std::lock_guard<std::mutex> lock(global_map_mutex);
-                    global_map->clear();
-                }
-
-                pcl::PointCloud<pcl::PointXYZ>::Ptr new_global(new pcl::PointCloud<pcl::PointXYZ>());
-
                 // Snapshot pointclouds to minimize lock holding
                 std::map<std::string, PointcloudTF> snapshot;
                 {
@@ -157,6 +152,8 @@ class MapServer {
                 for (auto it = snapshot.begin(); it != snapshot.end(); ++it) {
                     const std::string& robot_id = it->first;
                     const PointcloudTF& pc_tf = it->second;
+
+
                     Pointcloud pointcloud = pc_tf.pointcloud;
                     Transform odom_to_base_link = pc_tf.odom_to_base_link_transform;
 
@@ -185,13 +182,8 @@ class MapServer {
                     Transform base_link_to_global = odom_to_global * base_link_to_odom;
 
                     // Transform the pointcloud data using the combined transformation
-                    pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-                    transformed_cloud->width = pointcloud_width;
-                    transformed_cloud->height = pointcloud_height;
-                    transformed_cloud->is_dense = false;
-                    transformed_cloud->points.resize(pointcloud_width * pointcloud_height);
-
-                    if (pointcloud_data.size() != static_cast<size_t>(pointcloud_width) * static_cast<size_t>(pointcloud_height) * 3) {
+                    octomap::Pointcloud octo_pointcloud;
+                    if (pointcloud_data.size() != pointcloud_width * pointcloud_height * 3) {
                         std::cout << "[MapServer] Pointcloud size mismatch for robot " << robot_id << std::endl;
                         continue;
                     }
@@ -199,21 +191,19 @@ class MapServer {
                     for (size_t i = 0; i < pointcloud_data.size(); i += 3) {
                         std::array<float,3> p{ pointcloud_data[i], pointcloud_data[i+1], pointcloud_data[i+2] };
                         auto tp = base_link_to_global.transformPoint(p);
-                        auto& dst = transformed_cloud->points[i/3];
-                        dst.x = tp[0]; dst.y = tp[1]; dst.z = tp[2];
+                        octo_pointcloud.push_back(tp[0], tp[1], tp[2]);
                     }
 
-                    // Accumulate into new global cloud
-                    *new_global += *transformed_cloud;
+                    // Update the octomap with the transformed pointcloud
+                    octomap::point3d sensor_origin(0.0f, 0.0f, 0.0f); // global origin
+                    global_map.insertPointCloud(octo_pointcloud, sensor_origin, -1, true, true);
                 }
 
-                // Swap into global_map under lock
-                {
-                    std::lock_guard<std::mutex> lk(global_map_mutex);
-                    *global_map = *new_global;
-                }
+                // Update inner nodes of the octomap
+                global_map.updateInnerOccupancy();
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(200)); // 5 Hz
+                // Sleep for a short duration before next update
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
 };
