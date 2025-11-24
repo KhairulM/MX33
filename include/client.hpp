@@ -63,6 +63,8 @@ public:
         }
 
         std::string service_address(static_cast<char*>(lookup_reply.data()), lookup_reply.size());
+
+        std::cout << "Service " << mServiceName << " found at address: " << service_address << std::endl;
         if (service_address.empty()) {
             throw std::runtime_error("Service not found: " + mServiceName);
         }
@@ -78,16 +80,19 @@ public:
 
         serviceSock.connect(service_address);
 
+        // Set receive timeout to 5 seconds
+        serviceSock.set(zmq::sockopt::rcvtimeo, 5000);
+
         // 3) Serialize and send request (blocking)
         msgpack::sbuffer sbuf;
         msgpack::pack(sbuf, req);
         serviceSock.send(zmq::buffer(sbuf.data(), sbuf.size()), zmq::send_flags::none);
 
-        // 4) Receive and unpack response (blocking)
+        // 4) Receive and unpack response (blocking with timeout)
         zmq::message_t resp_msg;
-        bool recv_ok = serviceSock.recv(resp_msg, zmq::recv_flags::none);
-        if (!recv_ok) {
-            throw std::runtime_error("Failed to receive response from service");
+        auto recv_result = serviceSock.recv(resp_msg, zmq::recv_flags::none);
+        if (!recv_result) {
+            throw std::runtime_error("Failed to receive response from service (timeout or error)");
         }
 
         msgpack::object_handle oh = msgpack::unpack(static_cast<const char*>(resp_msg.data()), resp_msg.size());

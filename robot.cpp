@@ -52,7 +52,7 @@ public:
         );
     }
 
-    bool registerToMapServer() {
+    void registerToMapServer() {
         try {
             RegisterRobot::Request req;
             req.id = robot_id;
@@ -65,13 +65,13 @@ public:
             std::cout << "[Robot " << robot_id << "] Registering robot " << robot_id << " with IP " << req.ip_address << std::endl;
 
             RegisterRobot::Response resp = register_client->call(req);
-
-            std::cout << "[Robot " << robot_id << "] Registration response: " << resp.message << std::endl;
-            return resp.success;
-
+            if (resp.success) {
+                std::cout << "[Robot " << robot_id << "] Registration successful: " << resp.message << std::endl;
+            } else {
+                std::cerr << "[Robot " << robot_id << "] Registration failed: " << resp.message << std::endl;
+            }
         } catch (const std::exception& e) {
             std::cerr << "[Robot " << robot_id << "] Failed to register robot: " << e.what() << std::endl;
-            return false;
         }
     }
 
@@ -115,13 +115,8 @@ public:
     
     void run() {
         // First, register to the map server
-        if (!registerToMapServer()) {
-            std::cerr << "[Robot " << robot_id << "] Failed to register robot. Exiting." << std::endl;
-            return;
-        }
-        
-        std::cout << "[Robot " << robot_id << "] Registered successfully. Starting pointcloud publishing..." << std::endl;
-        
+        registerToMapServer();
+                
         // Start publishing pointclouds
         while (true) {
             publishPointcloud();
@@ -133,7 +128,7 @@ public:
 
 int main(int argc, char* argv[]) {
     // Parse command line arguments
-    std::string robot_id = "robot_1";
+    std::string robot_id = "1";
     std::string broker_address = "tcp://localhost:5555";
     std::string broker_public_key_path = "";
 

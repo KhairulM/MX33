@@ -82,23 +82,26 @@ class Server {
 
 
         void registerService() {
-            // Bind the socket
+            mRegisterServiceSocket.connect(mRegistryAddress);
+
+            // Bind the socket, if the service port is 0, zeromq will assign an ephemeral port
             mRepSocket.bind("tcp://" + mServiceIpAddress + ":" + mServicePort);
 
             // Get the final address
             mServiceAddress = mRepSocket.get(zmq::sockopt::last_endpoint);
+
+            std::cout << "Service " << mServiceName << " bound at address: " << mServiceAddress << std::endl;
 
             // Update the current IP address and the assigned port (if its an ephemeral port)
             mServiceIpAddress = mServiceAddress.substr(mServiceAddress.find("://") + 3, mServiceAddress.rfind(":") - (mServiceAddress.find("://") + 3));
             mServicePort = mServiceAddress.substr(mServiceAddress.rfind(":") + 1);
 
             // Register the service name with the broker (use REGISTER command)
-            mRegisterServiceSocket.connect(mRegistryAddress);
-            {
-                std::string reg_msg = "REGISTER " + mServiceName + " " + mServiceAddress;
-                mRegisterServiceSocket.send(zmq::buffer(reg_msg), zmq::send_flags::none);
-            }
+            std::string reg_msg = "REGISTER " + mServiceName + " " + mServiceAddress;
+            mRegisterServiceSocket.send(zmq::buffer(reg_msg), zmq::send_flags::none);
             
+            std::cout << "Registering service " << mServiceName << " at " << mServiceAddress << std::endl;
+
             zmq::message_t reply;
             mRegisterServiceSocket.recv(reply, zmq::recv_flags::none);
             std::cout << "Registered service " << mServiceName << " at " << mServiceAddress << std::endl;
@@ -125,13 +128,19 @@ class Server {
             mHandler = std::move(handler);
         }
 
-        // Non-blocking run: loop checking for requests; on errors throw back to caller.
-        void run() {
+        // Blocking run: loop checking for requests; on errors throw back to caller.
+        void run(std::atomic<bool>* stop_flag = nullptr) {
             if (!mHandler) {
-                throw std::runtime_error("No handler registered");
+                throw std::runtime_error("No message handler registered");
             }
 
             while (true) {
+                // Check stop flag for graceful shutdown
+                if (stop_flag && stop_flag->load()) {
+                    std::cout << "[" << nName << "] Stop signal received, shutting down..." << std::endl;
+                    break;
+                }
+
                 zmq::message_t request;
 
                 auto received = mRepSocket.recv(request, zmq::recv_flags::dontwait);
@@ -166,6 +175,7 @@ class Server {
             }
 
             // requested to stop: unregister before returning
+            std::cout << "[" << nName << "] Unregistering service before exit..." << std::endl;
             unregisterService();
         }
 };

@@ -2,6 +2,7 @@
 #include <string>
 #include <fstream>
 #include <thread>
+#include <csignal>
 #include <map>
 #include <mutex>
 #include <pcl/point_cloud.h>
@@ -24,6 +25,13 @@
 // Srvs
 #include "srvs/register_robot.hpp"
 
+std::atomic<bool> is_stopped(false);
+
+void signalHandler(int signum) {
+    std::cout << "\n[MapServer] Interrupt signal (" << signum << ") received. Shutting down..." << std::endl;
+    is_stopped = true;
+}
+
 class MapServer {
     std::string _transformation_file_path;
 
@@ -45,15 +53,15 @@ class MapServer {
     public:
         // Constructor
         MapServer(
-            std::string broker_address,
+            std::string broker_ip_address,
             std::string transformation_file_path = "",
             std::string register_robot_service_name = "register_robot",
             std::string pointcloud_topic = "pointcloud_tf",
             std::string map_save_path = "global_map.pcd",
             std::string broker_public_key_path = ""
         )
-        : register_robot_server("MapServer_RegisterRobot", broker_address, register_robot_service_name, "", "0", broker_public_key_path)
-        , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_address, pointcloud_topic, broker_public_key_path)
+        : register_robot_server("MapServer_RegisterRobot", broker_ip_address + ":5558", register_robot_service_name)
+        , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address + ":5555", pointcloud_topic, broker_public_key_path)
         {
             _transformation_file_path = transformation_file_path;
         }
@@ -83,9 +91,15 @@ class MapServer {
             std::thread construct_global_map_thread(&MapServer::constructGlobalMapThread, this);
 
             // Join the threads
-            register_robot_thread.join();
-            process_pointclouds_thread.join();
-            construct_global_map_thread.join();
+            if (register_robot_thread.joinable()) {
+                register_robot_thread.join();
+            }
+            if (process_pointclouds_thread.joinable()) {
+                process_pointclouds_thread.join();
+            }
+            if (construct_global_map_thread.joinable()) {
+                construct_global_map_thread.join();
+            }
         }
 
         void registerRobotThread() {
@@ -120,13 +134,16 @@ class MapServer {
                 return res;
             });
 
-            register_robot_server.run();
+            register_robot_server.run(&is_stopped);
         }
 
         void processPointcloudsThread() {
-            while (true) {
+            while (!is_stopped) {
                 auto msg = pointcloud_subscriber.getMessageObjectPtr();
-                if (!msg) continue;
+                if (!msg) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
 
                 // Extract robot_id from the message
                 std::string robot_id = msg->robot_id;
@@ -136,11 +153,13 @@ class MapServer {
                     robot_pointclouds[robot_id] = *msg;
                 }
             }
+            pointcloud_subscriber.stop();
+            std::cout << "[MapServer] Pointcloud processing thread stopped." << std::endl;
         }
 
         void constructGlobalMapThread() {
             // Combine all robots' pointclouds into a global map
-            while (true) {
+            while (!is_stopped) {
                 // Snapshot pointclouds to minimize lock holding
                 std::map<std::string, PointcloudTF> snapshot;
                 {
@@ -154,8 +173,8 @@ class MapServer {
                     const PointcloudTF& pc_tf = it->second;
 
 
-                    Pointcloud pointcloud = pc_tf.pointcloud;
-                    Transform odom_to_base_link = pc_tf.odom_to_base_link_transform;
+                    const Pointcloud& pointcloud = pc_tf.pointcloud;
+                    const Transform& odom_to_base_link = pc_tf.odom_to_base_link_transform;
 
                     int pointcloud_width = pointcloud.width;
                     int pointcloud_height = pointcloud.height;
@@ -205,13 +224,28 @@ class MapServer {
                 // Sleep for a short duration before next update
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            
+            // Save the global map to a file
+            std::string octomap_filename = "global_map.ot";
+            std::cout << "[MapServer] Saving global map to " << octomap_filename << "..." << std::endl;
+            if (global_map.write(octomap_filename)) {
+                std::cout << "[MapServer] Global map saved successfully." << std::endl;
+            } else {
+                std::cerr << "[MapServer] Failed to save global map." << std::endl;
+            }
+
+            std::cout << "[MapServer] Global map construction thread stopped." << std::endl;
         }
 };
 
 int main(int argc, char* argv[]) {
+    // Set up signal handler for graceful shutdown
+    signal(SIGINT, signalHandler);
+    signal(SIGTERM, signalHandler);
+
     // Default parameters
-    std::string broker_address = "tcp://localhost:5555";
-    std::string transformation_file_path = "global_to_local_tf.txt";
+    std::string broker_ip_address = "tcp://localhost";
+    std::string transformation_file_path = "global_to_odom_tf.txt";
     std::string register_robot_service_name = "register_robot";
     std::string pointcloud_topic = "pointcloud_tf";
     std::string map_save_path = "global_map.pcd";
@@ -219,7 +253,7 @@ int main(int argc, char* argv[]) {
 
     // Parse command line arguments if needed
     if (argc > 1) {
-        broker_address = argv[1];
+        broker_ip_address = argv[1];
     }
     if (argc > 2) {
         transformation_file_path = argv[2];
@@ -229,11 +263,11 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "[MapServer] Starting Map Server..." << std::endl;
-    std::cout << "[MapServer] Broker address: " << broker_address << std::endl;
+    std::cout << "[MapServer] Broker address: " << broker_ip_address << std::endl;
     std::cout << "[MapServer] Transformation file: " << transformation_file_path << std::endl;
 
     MapServer map_server(
-        broker_address,
+        broker_ip_address,
         transformation_file_path,
         register_robot_service_name,
         pointcloud_topic,
@@ -243,5 +277,6 @@ int main(int argc, char* argv[]) {
 
     map_server.run();
 
+    std::cout << "[MapServer] Map Server stopped gracefully." << std::endl;
     return 0;
 }

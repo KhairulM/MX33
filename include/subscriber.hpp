@@ -8,6 +8,7 @@
 #include <thread>
 #include <mutex>
 #include <memory>
+#include <atomic>
 
 #include <zmq.hpp>
 #include <msgpack.hpp>
@@ -29,20 +30,31 @@ class Subscriber {
 
     std::thread mThread;    
     std::mutex mMutex;
+    std::atomic<bool> mRunning{true};
 
     void processZMQMessage() {
-        while (true) {
+        while (mRunning.load()) {
             zmq::message_t topic, message;
 
             try {
-                mSocket.recv(&topic);
-                mSocket.recv(&message);
+                // Use modern recv API with timeout
+                auto result_topic = mSocket.recv(topic, zmq::recv_flags::dontwait);
+                if (!result_topic) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+                auto result_msg = mSocket.recv(message, zmq::recv_flags::none);
+                if (!result_msg) {
+                    continue;
+                }
             } catch (const zmq::error_t& e) {
-                break;
+                if (!mRunning.load()) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
             }
 
             std::lock_guard<std::mutex> lock(mMutex);
-            if (mMessages.size() >= mMaxQueueSize) {
+            if (mMessages.size() >= static_cast<size_t>(mMaxQueueSize)) {
                 mMessages.pop(); // Remove the oldest message
             }
             mMessages.push(std::move(message));
@@ -83,10 +95,15 @@ class Subscriber {
 
         // Destructor
         ~Subscriber() {
+            stop();
             mSocket.close();
             mContext.close();
+        }
+
+        void stop() {
+            mRunning = false;  // Signal thread to stop
             if (mThread.joinable()) {
-                mThread.join();
+                mThread.join();  // Wait for thread to finish
             }
         }
 
