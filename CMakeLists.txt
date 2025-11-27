@@ -8,6 +8,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Intel realsense SDK
 find_package(realsense2 REQUIRED)
 
+# ZED SDK
+find_package(ZED 3 QUIET)
+if(ZED_FOUND)
+    message(STATUS "ZED SDK found: ${ZED_INCLUDE_DIRS}")
+    include_directories(${ZED_INCLUDE_DIRS})
+    link_directories(${ZED_LIBRARY_DIR})
+    add_definitions(-DZED_AVAILABLE)
+else()
+    message(WARNING "ZED SDK not found. Robot will only support RealSense cameras.")
+endif()
+
 # ZeroMQ (cppzmq)
 find_package(cppzmq REQUIRED)
 
@@ -79,8 +90,19 @@ target_link_libraries(
 )
 
 add_executable(robot robot.cpp)
-target_link_libraries(
-    robot
-    cppzmq
-    ${PCL_LIBRARIES}
-)
+if(ZED_FOUND)
+    target_link_libraries(
+        robot
+        cppzmq
+        realsense2
+        ${PCL_LIBRARIES}
+        ${ZED_LIBRARIES}
+    )
+else()
+    target_link_libraries(
+        robot
+        cppzmq
+        realsense2
+        ${PCL_LIBRARIES}
+    )
+endif()

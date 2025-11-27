@@ -18,41 +18,49 @@
 // Change: Server now takes Request and Response types
 template<typename Request, typename Response>
 class Server {
-    std::string nName;
-    std::string mRegistryAddress;
-    std::string mServiceName;
-    std::string mServiceAddress;
-    std::string mServiceIpAddress;
-    std::string mServicePort;
+    std::string name;
+    std::string service_registry_address;
+    std::string service_name;
+    std::string service_ip_address;
+    std::string service_port;
 
     // store user-provided handler
-    std::function<Response(const Request&)> mHandler;
+    std::function<Response(const Request&)> request_handler;
+    
+    bool is_registered = false;
 
     char broker_public_key[41]; // Public key for the broker
     char public_key[41]; // Public key for the service server
     char secret_key[41]; // Secret key for the service server
 
-    zmq::context_t mContext;
-    zmq::socket_t mRepSocket, mRegisterServiceSocket;
+    zmq::context_t context;
+    zmq::socket_t service_reply_socket, service_registry_socket;
 
     public:
         // Constructor
         Server(
             std::string name, 
-            std::string proxy_address, 
+            std::string broker_ip_address, 
             std::string service_name,
-            std::string server_ip_address = "",
+            std::string service_ip_address = "", // if its empty, it will get the machine local IP
             std::string service_port = "0", // use ephemeral port by default 
-            std::string broker_public_key_path = "") {
-            nName = name;
-            mRegistryAddress = proxy_address;
-            mServiceName = service_name;
-            mServiceIpAddress = get_local_ip();
-            mServicePort = service_port; // use ephemeral port by default
+            std::string broker_public_key_path = "") 
+        {
+            this->name = name;
+            this->service_registry_address = "tcp://" + broker_ip_address + ":5558";
+            
+            if (service_ip_address.empty() || service_ip_address.length() == 0) {
+                this->service_ip_address = get_local_ip();
+            } else {
+                this->service_ip_address = service_ip_address;
+            }
+            
+            this->service_port = service_port;
+            this->service_name = service_name;
 
-            mContext = zmq::context_t(1);
-            mRepSocket = zmq::socket_t(mContext, ZMQ_REP);
-            mRegisterServiceSocket = zmq::socket_t(mContext, ZMQ_REQ);
+            context = zmq::context_t(1);
+            service_reply_socket = zmq::socket_t(context, ZMQ_REP);
+            service_registry_socket = zmq::socket_t(context, ZMQ_REQ);
 
             if (!broker_public_key_path.empty()) {
                 std::ifstream pub_file(broker_public_key_path);
@@ -60,11 +68,11 @@ class Server {
                     pub_file >> broker_public_key;
                     zmq_curve_keypair(public_key, secret_key);
 
-                    mRegisterServiceSocket.set(zmq::sockopt::curve_serverkey, broker_public_key);
-                    mRegisterServiceSocket.set(zmq::sockopt::curve_publickey, public_key);                    
-                    mRegisterServiceSocket.set(zmq::sockopt::curve_secretkey, secret_key);
+                    service_registry_socket.set(zmq::sockopt::curve_serverkey, broker_public_key);
+                    service_registry_socket.set(zmq::sockopt::curve_publickey, public_key);                    
+                    service_registry_socket.set(zmq::sockopt::curve_secretkey, secret_key);
                 } else {
-                    std::cerr << "Error reading broker public key file.\n";
+                    std::cerr << "[" << name << "] Error reading broker public key file.\n";
                 }
             }
         }
@@ -74,82 +82,83 @@ class Server {
             // Attempt to unregister service
             unregisterService();
 
-            mRepSocket.close();
-            mRegisterServiceSocket.close();
-            mContext.shutdown();
-            mContext.close();
+            service_reply_socket.close();
+            service_registry_socket.close();
+            context.shutdown();
+            context.close();
         }
 
 
         void registerService() {
-            mRegisterServiceSocket.connect(mRegistryAddress);
+            service_registry_socket.connect(service_registry_address);
 
-            // Bind the socket, if the service port is 0, zeromq will assign an ephemeral port
-            mRepSocket.bind("tcp://" + mServiceIpAddress + ":" + mServicePort);
+            // Bind the reply socket, if the service port is 0, zeromq will assign an ephemeral port
+            service_reply_socket.bind("tcp://" + this->service_ip_address + ":" + this->service_port);
 
             // Get the final address
-            mServiceAddress = mRepSocket.get(zmq::sockopt::last_endpoint);
+            std::string service_address = service_reply_socket.get(zmq::sockopt::last_endpoint);
 
-            std::cout << "Service " << mServiceName << " bound at address: " << mServiceAddress << std::endl;
+            std::cout << "[" << name << "] Service " << service_name << " bound at address: " << service_address << std::endl;
 
             // Update the current IP address and the assigned port (if its an ephemeral port)
-            mServiceIpAddress = mServiceAddress.substr(mServiceAddress.find("://") + 3, mServiceAddress.rfind(":") - (mServiceAddress.find("://") + 3));
-            mServicePort = mServiceAddress.substr(mServiceAddress.rfind(":") + 1);
+            this->service_ip_address = service_address.substr(service_address.find("://") + 3, service_address.rfind(":") - (service_address.find("://") + 3));
+            this->service_port = service_address.substr(service_address.rfind(":") + 1);
+
+            std::cout << "[" << name << "] Registering service " << service_name << " at " << service_address << std::endl;
 
             // Register the service name with the broker (use REGISTER command)
-            std::string reg_msg = "REGISTER " + mServiceName + " " + mServiceAddress;
-            mRegisterServiceSocket.send(zmq::buffer(reg_msg), zmq::send_flags::none);
-            
-            std::cout << "Registering service " << mServiceName << " at " << mServiceAddress << std::endl;
+            std::string reg_msg = "REGISTER " + service_name + " " + service_address;
+            service_registry_socket.send(zmq::buffer(reg_msg), zmq::send_flags::none);
 
             zmq::message_t reply;
-            mRegisterServiceSocket.recv(reply, zmq::recv_flags::none);
-            std::cout << "Registered service " << mServiceName << " at " << mServiceAddress << std::endl;
+            service_registry_socket.recv(reply, zmq::recv_flags::none);
+
+            std::cout << "[" << name << "] Registered service " << service_name << " at " << service_address << std::endl;
+            is_registered = true;
         }
 
         void unregisterService() {
-            if (mServiceName.empty() || mRegistryAddress.empty()) {
+            if (service_name.empty() || service_registry_address.empty() || !is_registered) {
                 return; // nothing to unregister
             }
 
             // Ensure connected to broker (connect is idempotent)
-            mRegisterServiceSocket.connect(mRegistryAddress);
+            service_registry_socket.connect(service_registry_address);
 
-            std::string msg = "UNREGISTER " + mServiceName;
-            mRegisterServiceSocket.send(zmq::buffer(msg), zmq::send_flags::none);
+            std::string msg = "UNREGISTER " + service_name;
+            service_registry_socket.send(zmq::buffer(msg), zmq::send_flags::none);
 
             zmq::message_t reply;
-            mRegisterServiceSocket.recv(reply, zmq::recv_flags::none);
-            std::cout << "Unregistered service " << mServiceName << std::endl;
+            service_registry_socket.recv(reply, zmq::recv_flags::none);
+            std::cout << "[" << name << "] Unregistered service " << service_name << std::endl;
+            is_registered = false;
         }
 
         // Store user-defined handler that maps Request -> Response
         void onRequestObject(std::function<Response(const Request&)> handler) {
-            mHandler = std::move(handler);
+            request_handler = std::move(handler);
         }
 
         // Blocking run: loop checking for requests; on errors throw back to caller.
         void run(std::atomic<bool>* stop_flag = nullptr) {
-            if (!mHandler) {
-                throw std::runtime_error("No message handler registered");
+            if (!request_handler) {
+                throw std::runtime_error("["  + name + "] No message handler registered");
             }
 
             while (true) {
                 // Check stop flag for graceful shutdown
                 if (stop_flag && stop_flag->load()) {
-                    std::cout << "[" << nName << "] Stop signal received, shutting down..." << std::endl;
+                    std::cout << "[" << name << "] Stop signal received, shutting down..." << std::endl;
                     break;
                 }
 
                 zmq::message_t request;
 
-                auto received = mRepSocket.recv(request, zmq::recv_flags::dontwait);
+                auto received = service_reply_socket.recv(request, zmq::recv_flags::dontwait);
                 if (!received) {
                     std::this_thread::yield();
                     continue;
                 }
-
-                std::cout << "Received request of size " << request.size() << " bytes" << std::endl;
 
                 // Deserialize Request
                 Request req_obj;
@@ -158,15 +167,15 @@ class Server {
                     oh.get().convert(req_obj);
                 }
 
-                // Execute handler 
-                Response resp_obj = mHandler(req_obj);
+                // Execute message handler 
+                Response resp_obj = request_handler(req_obj);
 
                 // Serialize Response
                 msgpack::sbuffer sbuf;
                 msgpack::pack(sbuf, resp_obj);
 
                 // Send response non-blocking; on failure, throw an error to caller
-                auto sent = mRepSocket.send(zmq::buffer(sbuf.data(), sbuf.size()), zmq::send_flags::dontwait);
+                auto sent = service_reply_socket.send(zmq::buffer(sbuf.data(), sbuf.size()), zmq::send_flags::dontwait);
                 if (!sent) {
                     // Couldn't send now (would block) — propagate as a ZMQ error
                     unregisterService();
@@ -175,7 +184,7 @@ class Server {
             }
 
             // requested to stop: unregister before returning
-            std::cout << "[" << nName << "] Unregistering service before exit..." << std::endl;
+            std::cout << "[" << name << "] Unregistering service before exit..." << std::endl;
             unregisterService();
         }
 };

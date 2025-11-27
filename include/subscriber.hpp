@@ -15,62 +15,61 @@
 
 template<typename T>
 class Subscriber {
-    std::string mName; // Name of the subscriber
-    std::string mProxyAddress; // Proxy address written in the format of "tcp://hostname:port"
-    std::string mTopic; // Topic to subscribe to
+    std::string name; // Name of the subscriber
+    std::string topic; // Topic to subscribe to
+    std::string broker_address; // IP address and port of the broker
     char broker_public_key[41]; // Public key for the broker
     char public_key[41]; // Public key for the subscriber
     char secret_key[41]; // Secret key for the subscriber
 
-    zmq::context_t mContext;
-    zmq::socket_t mSocket;
+    zmq::context_t context;
+    zmq::socket_t socket;
     
-    std::queue<zmq::message_t> mMessages;
-    int mMaxQueueSize = 45;
+    std::queue<zmq::message_t> message_queue;
+    int max_message_queue_size = 45;
 
-    std::thread mThread;    
-    std::mutex mMutex;
-    std::atomic<bool> mRunning{true};
+    std::thread thread;    
+    std::mutex mutex;
+    std::atomic<bool> is_stopped{false};
 
     void processZMQMessage() {
-        while (mRunning.load()) {
+        while (!is_stopped.load()) {
             zmq::message_t topic, message;
 
             try {
-                // Use modern recv API with timeout
-                auto result_topic = mSocket.recv(topic, zmq::recv_flags::dontwait);
+                auto result_topic = socket.recv(topic, zmq::recv_flags::dontwait);
                 if (!result_topic) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     continue;
                 }
-                auto result_msg = mSocket.recv(message, zmq::recv_flags::none);
+                auto result_msg = socket.recv(message, zmq::recv_flags::none);
                 if (!result_msg) {
                     continue;
                 }
             } catch (const zmq::error_t& e) {
-                if (!mRunning.load()) break;
+                if (!is_stopped.load()) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
 
-            std::lock_guard<std::mutex> lock(mMutex);
-            if (mMessages.size() >= static_cast<size_t>(mMaxQueueSize)) {
-                mMessages.pop(); // Remove the oldest message
+            std::lock_guard<std::mutex> lock(mutex);
+            if (max_message_queue_size >= 0 && (int)message_queue.size() >= max_message_queue_size) {
+                message_queue.pop(); // Remove the oldest message
             }
-            mMessages.push(std::move(message));
+            message_queue.push(std::move(message));
         }
     }
 
     public:
         // Constructor
-        Subscriber(std::string name, std::string proxy_address, std::string topic, std::string broker_public_key_path = "", int max_queue_size = 45) {
-            mName = name;
-            mProxyAddress = proxy_address;
-            mTopic = topic;
-            mMaxQueueSize = max_queue_size;
+        Subscriber(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int max_queue_size = 45) {
+            this->name = name;
+            this->broker_address = "tcp://" + broker_ip_address + ":5556";
+            this->topic = topic;
+            this->max_message_queue_size = max_queue_size;
             
-            mContext = zmq::context_t(1);
-            mSocket = zmq::socket_t(mContext, ZMQ_SUB);
+            context = zmq::context_t(1);
+            socket = zmq::socket_t(context, ZMQ_SUB);
 
             if (!broker_public_key_path.empty()) {
                 std::ifstream pub_file(broker_public_key_path);
@@ -78,43 +77,43 @@ class Subscriber {
                     pub_file >> broker_public_key;
                     zmq_curve_keypair(public_key, secret_key);
 
-                    mSocket.set(zmq::sockopt::curve_serverkey, broker_public_key);
-                    mSocket.set(zmq::sockopt::curve_publickey, public_key);
-                    mSocket.set(zmq::sockopt::curve_secretkey, secret_key);
+                    socket.set(zmq::sockopt::curve_serverkey, broker_public_key);
+                    socket.set(zmq::sockopt::curve_publickey, public_key);
+                    socket.set(zmq::sockopt::curve_secretkey, secret_key);
                 } else {
                     std::cerr << "Error reading broker public key file.\n";
                 }
             }
 
             
-            mSocket.connect(mProxyAddress);
-            mSocket.set(zmq::sockopt::subscribe, mTopic);
+            socket.connect(broker_address);
+            socket.set(zmq::sockopt::subscribe, topic);
             
-            mThread = std::thread(&Subscriber::processZMQMessage, this);
+            thread = std::thread(&Subscriber::processZMQMessage, this);
         }
 
         // Destructor
         ~Subscriber() {
             stop();
-            mSocket.close();
-            mContext.close();
+            socket.close();
+            context.close();
         }
 
         void stop() {
-            mRunning = false;  // Signal thread to stop
-            if (mThread.joinable()) {
-                mThread.join();  // Wait for thread to finish
+            is_stopped = true;  // Signal thread to stop
+            if (thread.joinable()) {
+                thread.join();  // Wait for thread to finish
             }
         }
 
         std::unique_ptr<T> getMessageObjectPtr() {
-            std::lock_guard<std::mutex> lock(mMutex);
-            if (mMessages.empty()) {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (message_queue.empty()) {
                 return nullptr;
             }
 
-            zmq::message_t message = std::move(mMessages.front());
-            mMessages.pop();
+            zmq::message_t message = std::move(message_queue.front());
+            message_queue.pop();
 
             // Deserialize the message with msgpack
             msgpack::object_handle oh = msgpack::unpack(static_cast<const char*>(message.data()), message.size());

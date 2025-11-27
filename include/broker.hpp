@@ -42,7 +42,7 @@ class Broker {
                 if (secret_file.is_open()) {
                     secret_file >> private_key;
                 } else {
-                    std::cerr << "Error reading key file.\n";
+                    std::cerr << "[Broker] Error reading key file.\n";
                 }
             }
         }
@@ -111,7 +111,7 @@ class Broker {
                     zmq::poll(items, 2, std::chrono::milliseconds(100));
                 } catch (const zmq::error_t &e) {
                     if (!mRunning.load()) break; // likely interrupted
-                    std::cerr << "poll error: " << e.what() << std::endl;
+                    std::cerr << "[Broker] poll error: " << e.what() << std::endl;
                 }
 
                 if (items[0].revents & ZMQ_POLLIN) {
@@ -124,7 +124,7 @@ class Broker {
 
             frontend.close();
             backend.close();
-            std::cout << "Forwarder thread exiting" << std::endl;
+            std::cout << "[Broker] Forwarder thread exiting" << std::endl;
         }
 
         void runServiceNameRegistryLookup(zmq::context_t& context) {
@@ -154,7 +154,7 @@ class Broker {
                 }
             }
             serviceRegistrySocket.close();
-            std::cout << "Lookup thread exiting" << std::endl;
+            std::cout << "[Broker] Lookup thread exiting" << std::endl;
         }
 
         void runServiceNameRegistryModify(zmq::context_t& context) {
@@ -182,9 +182,9 @@ class Broker {
                             std::lock_guard<std::mutex> lock(mRegistryMutex);
                             mServiceNameRegistry[service_name_str] = address_str;
                         }
-                        std::cout << "Registered service: " << service_name_str << " at " << address_str << std::endl;
+                        std::cout << "[Broker] Registered service: " << service_name_str << " at " << address_str << std::endl;
                     } else {
-                        std::cerr << "Malformed REGISTER message: '" << registration_str << "'" << std::endl;
+                        std::cerr << "[Broker] Malformed REGISTER message: '" << registration_str << "'" << std::endl;
                     }
                 } else if (cmd == "UNREGISTER") {
                     std::string service_name_str; iss >> service_name_str;
@@ -196,22 +196,22 @@ class Broker {
                             if (it != mServiceNameRegistry.end()) { mServiceNameRegistry.erase(it); erased = true; }
                         }
                         if (erased) {
-                            std::cout << "Unregistered service: " << service_name_str << std::endl;
+                            std::cout << "[Broker] Unregistered service: " << service_name_str << std::endl;
                         } else {
-                            std::cout << "Service to unregister not found: " << service_name_str << std::endl;
+                            std::cout << "[Broker] Service to unregister not found: " << service_name_str << std::endl;
                         }
                     } else {
-                        std::cerr << "Malformed UNREGISTER message: '" << registration_str << "'" << std::endl;
+                        std::cerr << "[Broker] Malformed UNREGISTER message: '" << registration_str << "'" << std::endl;
                     }
                 } else {
-                    std::cerr << "Unknown service name registry command: '" << registration_str << "'" << std::endl;
+                    std::cerr << "[Broker] Unknown service name registry command: '" << registration_str << "'" << std::endl;
                 }
 
                 zmq::message_t reply; // empty ack
                 serviceRegistrySocket.send(reply, zmq::send_flags::none);
             }
             serviceRegistrySocket.close();
-            std::cout << "Modify thread exiting" << std::endl;
+            std::cout << "[Broker] Modify thread exiting" << std::endl;
         }
 };
 

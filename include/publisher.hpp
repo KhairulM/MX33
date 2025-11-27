@@ -9,23 +9,24 @@
 
 template<typename T>
 class Publisher {
-    std::string mName; // Name of the publisher
-    std::string mProxyAddress; // Proxy address written in the format of "tcp://hostname:port"
-    std::string mTopic; // Topic to publish to
+    std::string name; // Name of the publisher
+    std::string topic; // Topic to publish to
+    std::string broker_address; // IP address and port of the broker
     char broker_public_key[41]; // Public key for the broker
     char public_key[41]; // Public key for the publisher
     char secret_key[41]; // Secret key for the publisher
 
-    zmq::context_t mContext;
-    zmq::socket_t mSocket;
+    zmq::context_t context;
+    zmq::socket_t socket;
 
     public:
         // Constructor
-        Publisher(std::string name, std::string proxy_address, std::string topic, std::string broker_public_key_path = "") {
-            mName = name;
-            mProxyAddress = proxy_address;
-            mContext = zmq::context_t(1);
-            mSocket = zmq::socket_t(mContext, ZMQ_PUB);
+        Publisher(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "") {
+            this->name = name;
+            this->broker_address = "tcp://" + broker_ip_address + ":5555";
+            
+            context = zmq::context_t(1);
+            socket = zmq::socket_t(context, ZMQ_PUB);
 
             if (!broker_public_key_path.empty()) {
                 std::ifstream pub_file(broker_public_key_path);
@@ -33,23 +34,23 @@ class Publisher {
                     pub_file >> broker_public_key;
                     zmq_curve_keypair(public_key, secret_key);
 
-                    mSocket.set(zmq::sockopt::curve_serverkey, broker_public_key);
-                    mSocket.set(zmq::sockopt::curve_publickey, public_key);
-                    mSocket.set(zmq::sockopt::curve_secretkey, secret_key);
+                    socket.set(zmq::sockopt::curve_serverkey, broker_public_key);
+                    socket.set(zmq::sockopt::curve_publickey, public_key);
+                    socket.set(zmq::sockopt::curve_secretkey, secret_key);
                 } else {
                     std::cerr << "Error reading broker public key file.\n";
                 }
             }
 
 
-            mSocket.connect(mProxyAddress);
-            mTopic = topic;
+            socket.connect(broker_address);
+            this->topic = topic;
         }
         
         // Destructor
         ~Publisher() {
-            mSocket.close();
-            mContext.close();
+            socket.close();
+            context.close();
         }
 
         void publish(const T& message) {
@@ -58,13 +59,13 @@ class Publisher {
             msgpack::pack(buffer, message);
 
             // Create ZMQ message
-            zmq::message_t topic_message(mTopic.data(), mTopic.size());
+            zmq::message_t topic_message(topic.data(), topic.size());
             zmq::message_t zmq_message(buffer.size());
             memcpy(zmq_message.data(), buffer.data(), buffer.size());
 
             // Publish the message
-            mSocket.send(topic_message, zmq::send_flags::sndmore);
-            mSocket.send(zmq_message, zmq::send_flags::none);
+            socket.send(topic_message, zmq::send_flags::sndmore);
+            socket.send(zmq_message, zmq::send_flags::none);
         }
 
 };

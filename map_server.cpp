@@ -7,12 +7,12 @@
 #include <mutex>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/visualization/pcl_visualizer.h>
 #include <octomap/octomap.h>
 #include <octomap/OcTree.h>
 #include <octomap/Pointcloud.h>
 
 // Communication libraries
-#include "robot.hpp"
 #include "server.hpp"
 #include "publisher.hpp"
 #include "subscriber.hpp"
@@ -32,6 +32,15 @@ void signalHandler(int signum) {
     is_stopped = true;
 }
 
+class Robot {
+    public:
+        std::string id;
+        std::string ip_address;
+        Transform global_to_odom_transform;
+
+        bool connected = false;
+};
+
 class MapServer {
     std::string _transformation_file_path;
 
@@ -41,12 +50,16 @@ class MapServer {
 
     // pcl::PointCloud<pcl::PointXYZ>::Ptr global_map;
     octomap::OcTree global_map{0.1f}; // OctoMap with 0.1m resolution
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr global_map_pcl; // PCL version for visualization
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
     Subscriber<PointcloudTF> pointcloud_subscriber;
 
     std::mutex robots_mutex;
     std::mutex pointclouds_mutex;
+    std::mutex global_map_mutex;
+
+    bool enable_visualization;
 
     // Optional: viewer removed to avoid dependency on PCL visualization
 
@@ -58,12 +71,15 @@ class MapServer {
             std::string register_robot_service_name = "register_robot",
             std::string pointcloud_topic = "pointcloud_tf",
             std::string map_save_path = "global_map.pcd",
-            std::string broker_public_key_path = ""
+            std::string broker_public_key_path = "",
+            bool enable_viz = true
         )
-        : register_robot_server("MapServer_RegisterRobot", broker_ip_address + ":5558", register_robot_service_name)
-        , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address + ":5555", pointcloud_topic, broker_public_key_path)
+        : register_robot_server("MapServer_RegisterRobot", broker_ip_address, register_robot_service_name)
+        , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120)
         {
             _transformation_file_path = transformation_file_path;
+            enable_visualization = enable_viz;
+            global_map_pcl = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
         }
 
         void run() {
@@ -89,6 +105,11 @@ class MapServer {
             std::thread register_robot_thread(&MapServer::registerRobotThread, this);
             std::thread process_pointclouds_thread(&MapServer::processPointcloudsThread, this);
             std::thread construct_global_map_thread(&MapServer::constructGlobalMapThread, this);
+            
+            std::thread visualization_thread;
+            if (enable_visualization) {
+                visualization_thread = std::thread(&MapServer::visualizeGlobalMap, this);
+            }
 
             // Join the threads
             if (register_robot_thread.joinable()) {
@@ -99,6 +120,9 @@ class MapServer {
             }
             if (construct_global_map_thread.joinable()) {
                 construct_global_map_thread.join();
+            }
+            if (visualization_thread.joinable()) {
+                visualization_thread.join();
             }
         }
 
@@ -221,6 +245,11 @@ class MapServer {
                 // Update inner nodes of the octomap
                 global_map.updateInnerOccupancy();
 
+                // Convert octomap to PCL point cloud for visualization
+                if (enable_visualization) {
+                    updatePCLPointCloud();
+                }
+
                 // Sleep for a short duration before next update
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
@@ -236,6 +265,109 @@ class MapServer {
 
             std::cout << "[MapServer] Global map construction thread stopped." << std::endl;
         }
+
+        void updatePCLPointCloud() {
+            // Convert OctoMap to PCL point cloud
+            pcl::PointCloud<pcl::PointXYZRGB>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+            
+            for (octomap::OcTree::leaf_iterator it = global_map.begin_leafs(), end = global_map.end_leafs(); it != end; ++it) {
+                if (global_map.isNodeOccupied(*it)) {
+                    pcl::PointXYZRGB point;
+                    point.x = it.getX();
+                    point.y = it.getY();
+                    point.z = it.getZ();
+                    
+                    // Color by height
+                    float z_normalized = (point.z + 2.0f) / 4.0f; // Normalize z to [0, 1]
+                    z_normalized = std::max(0.0f, std::min(1.0f, z_normalized));
+                    
+                    // Create rainbow color gradient based on height
+                    if (z_normalized < 0.25f) {
+                        point.r = 0;
+                        point.g = static_cast<uint8_t>(255 * z_normalized * 4);
+                        point.b = 255;
+                    } else if (z_normalized < 0.5f) {
+                        point.r = 0;
+                        point.g = 255;
+                        point.b = static_cast<uint8_t>(255 * (0.5f - z_normalized) * 4);
+                    } else if (z_normalized < 0.75f) {
+                        point.r = static_cast<uint8_t>(255 * (z_normalized - 0.5f) * 4);
+                        point.g = 255;
+                        point.b = 0;
+                    } else {
+                        point.r = 255;
+                        point.g = static_cast<uint8_t>(255 * (1.0f - z_normalized) * 4);
+                        point.b = 0;
+                    }
+                    
+                    temp_cloud->points.push_back(point);
+                }
+            }
+            
+            temp_cloud->width = temp_cloud->points.size();
+            temp_cloud->height = 1;
+            temp_cloud->is_dense = false;
+            
+            // Thread-safe update
+            {
+                std::lock_guard<std::mutex> lock(global_map_mutex);
+                global_map_pcl = temp_cloud;
+            }
+        }
+
+        void visualizeGlobalMap() {
+            std::cout << "[MapServer] Starting PCL visualization..." << std::endl;
+            
+            // Wait a bit for initial data
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            
+            try {
+                // Create visualizer
+                pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Global Map - Real-time"));
+                viewer->setBackgroundColor(0, 0, 0);
+                viewer->addCoordinateSystem(1.0);
+                viewer->initCameraParameters();
+                viewer->setCameraPosition(0, 0, 10, 0, 0, 0, 0, 1, 0);
+                
+                bool cloud_added = false;
+                
+                while (!is_stopped && !viewer->wasStopped()) {
+                    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_copy;
+                    {
+                        std::lock_guard<std::mutex> lock(global_map_mutex);
+                        if (global_map_pcl && !global_map_pcl->empty()) {
+                            cloud_copy = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>(*global_map_pcl));
+                        }
+                    }
+                    
+                    if (cloud_copy && !cloud_copy->empty()) {
+                        if (!cloud_added) {
+                            viewer->addPointCloud<pcl::PointXYZRGB>(cloud_copy, "global_map");
+                            viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "global_map");
+                            cloud_added = true;
+                            std::cout << "[MapServer] Initial point cloud added: " << cloud_copy->points.size() << " voxels" << std::endl;
+                        } else {
+                            viewer->updatePointCloud<pcl::PointXYZRGB>(cloud_copy, "global_map");
+                        }
+                    }
+                    
+                    viewer->spinOnce(100);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                }
+                
+                if (viewer->wasStopped()) {
+                    std::cout << "[MapServer] PCL visualization window closed by user." << std::endl;
+                    is_stopped = true;
+                }
+                
+                viewer->close();
+            } catch (const std::exception& e) {
+                std::cerr << "[MapServer] Visualization error: " << e.what() << std::endl;
+                std::cerr << "[MapServer] Continuing without visualization..." << std::endl;
+            }
+            
+            std::cout << "[MapServer] PCL visualization stopped." << std::endl;
+        }
 };
 
 int main(int argc, char* argv[]) {
@@ -244,12 +376,13 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     // Default parameters
-    std::string broker_ip_address = "tcp://localhost";
+    std::string broker_ip_address = "localhost";
     std::string transformation_file_path = "global_to_odom_tf.txt";
     std::string register_robot_service_name = "register_robot";
     std::string pointcloud_topic = "pointcloud_tf";
     std::string map_save_path = "global_map.pcd";
     std::string broker_public_key_path = "";
+    bool enable_visualization = false; // Disabled by default due to VTK/OpenGL issues
 
     // Parse command line arguments if needed
     if (argc > 1) {
@@ -261,10 +394,15 @@ int main(int argc, char* argv[]) {
     if (argc > 3) {
         broker_public_key_path = argv[3];
     }
+    if (argc > 4) {
+        std::string viz_arg = argv[4];
+        enable_visualization = (viz_arg != "0" && viz_arg != "false" && viz_arg != "no");
+    }
 
     std::cout << "[MapServer] Starting Map Server..." << std::endl;
     std::cout << "[MapServer] Broker address: " << broker_ip_address << std::endl;
     std::cout << "[MapServer] Transformation file: " << transformation_file_path << std::endl;
+    std::cout << "[MapServer] Visualization: " << (enable_visualization ? "enabled" : "disabled") << std::endl;
 
     MapServer map_server(
         broker_ip_address,
@@ -272,7 +410,8 @@ int main(int argc, char* argv[]) {
         register_robot_service_name,
         pointcloud_topic,
         map_save_path,
-        broker_public_key_path
+        broker_public_key_path,
+        enable_visualization
     );
 
     map_server.run();
