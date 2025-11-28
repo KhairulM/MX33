@@ -11,6 +11,8 @@
 #include <octomap/OcTree.h>
 #include <octomap/Pointcloud.h>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/qos.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <std_msgs/msg/header.hpp>
@@ -52,7 +54,7 @@ class MapServer {
     std::map<std::string, Transform> global_to_odom_tf; // Global to odom transformations for each robot
 
     // pcl::PointCloud<pcl::PointXYZ>::Ptr global_map;
-    octomap::OcTree global_map{0.1f}; // OctoMap with 0.1m resolution
+    octomap::OcTree global_map{0.1f}; // OctoMap resolution in meters
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr global_map_pcl; // PCL version for visualization
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
@@ -85,7 +87,7 @@ class MapServer {
             rclcpp::init(0, nullptr);
             ros2_node = std::make_shared<rclcpp::Node>("map_server_node");
             pointcloud_publisher = ros2_node->create_publisher<sensor_msgs::msg::PointCloud2>(
-                "/global_map", 10);
+                "/global_map", rclcpp::QoS(1).best_effort().durability_volatile());
             std::cout << "[MapServer] ROS 2 publisher initialized on topic /global_map" << std::endl;
         }
 
@@ -93,7 +95,7 @@ class MapServer {
             // Read the global to local transformation file path
             std::ifstream infile(_transformation_file_path);
             if (!infile.is_open()) {
-                std::cout << "[MapServer] No existing transformation file found. Using identity transform for all robots." << std::endl;
+                std::cout << "[MapServer] No existing transformation from global to robot's odom file found" << std::endl;
             } else {
                 // Expected format per line: robot_id    x y z qx qy qz qw
                 // Where (x, y, z) is translation and (qx, qy, qz, qw) is rotation in quaternion, and all is in floating point
@@ -129,6 +131,15 @@ class MapServer {
             }
             
             rclcpp::shutdown();
+        }
+
+        void ros2SpinThread() {
+            std::cout << "[MapServer] Starting ROS 2 spin thread..." << std::endl;
+            while (!is_stopped && rclcpp::ok()) {
+                rclcpp::spin_some(ros2_node);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            std::cout << "[MapServer] ROS 2 spin thread stopped." << std::endl;
         }
 
         void registerRobotThread() {
@@ -176,6 +187,19 @@ class MapServer {
 
                 // Extract robot_id from the message
                 std::string robot_id = msg->robot_id;
+                float x, y, z;
+                float qx, qy, qz, qw;
+
+                x = msg->odom_to_base_link_transform.x;
+                y = msg->odom_to_base_link_transform.y;
+                z = msg->odom_to_base_link_transform.z;
+                qx = msg->odom_to_base_link_transform.qx;
+                qy = msg->odom_to_base_link_transform.qy;
+                qz = msg->odom_to_base_link_transform.qz;
+                qw = msg->odom_to_base_link_transform.qw;
+
+                std::cout << "Robot Pose x:" << x << " y:" << y << " z:" << z << std::endl;
+                std::cout << "Robot Orientation qx:" << qx << " qy:" << qy << " qz:" << qz << " w:" << qw << std::endl; 
 
                 {
                     std::lock_guard<std::mutex> lk(pointclouds_mutex);
@@ -222,12 +246,7 @@ class MapServer {
 
                     // Calculate the transformation from base_link frame to global frame
                     // Points in the pointcloud are in the base_link frame, we need to transform them to global frame
-                    // Transformation chain: base_link → odom → global
-                    // We have: global_to_odom (global→odom) and odom_to_base_link (odom→base_link)
-                    // We need: base_link_to_odom (inverse of odom_to_base_link) and odom_to_global (inverse of global_to_odom)
-                    Transform base_link_to_odom = odom_to_base_link.inverse();
-                    Transform odom_to_global = global_to_odom.inverse();
-                    Transform base_link_to_global = odom_to_global * base_link_to_odom;
+                    Transform base_link_to_global = global_to_odom * odom_to_base_link;
 
                     // Transform the pointcloud data using the combined transformation
                     octomap::Pointcloud octo_pointcloud;
@@ -244,18 +263,20 @@ class MapServer {
 
                     // Update the octomap with the transformed pointcloud
                     octomap::point3d sensor_origin(0.0f, 0.0f, 0.0f); // global origin
-                    global_map.insertPointCloud(octo_pointcloud, sensor_origin, -1, true, true);
+                    global_map.insertPointCloud(octo_pointcloud, sensor_origin, -1, false, true);
+                    // global_map.insertPointCloud(octo_pointcloud, sensor_origin);
+
                 }
 
                 // Update inner nodes of the octomap
-                global_map.updateInnerOccupancy();
+                // global_map.updateInnerOccupancy();
 
                 // Convert octomap to PCL point cloud and publish to ROS 2
                 updatePCLPointCloud();
                 publishPointCloud2();
 
                 // Sleep for a short duration before next update
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             
             // Save the global map to a file
@@ -317,15 +338,6 @@ class MapServer {
                 std::lock_guard<std::mutex> lock(global_map_mutex);
                 global_map_pcl = temp_cloud;
             }
-        }
-
-        void ros2SpinThread() {
-            std::cout << "[MapServer] Starting ROS 2 spin thread..." << std::endl;
-            while (!is_stopped && rclcpp::ok()) {
-                rclcpp::spin_some(ros2_node);
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            std::cout << "[MapServer] ROS 2 spin thread stopped." << std::endl;
         }
 
         void publishPointCloud2() {
