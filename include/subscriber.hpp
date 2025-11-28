@@ -62,7 +62,7 @@ class Subscriber {
 
     public:
         // Constructor
-        Subscriber(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int max_queue_size = 45) {
+        Subscriber(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int max_queue_size = 1) {
             this->name = name;
             this->broker_address = "tcp://" + broker_ip_address + ":5556";
             this->topic = topic;
@@ -70,6 +70,9 @@ class Subscriber {
             
             context = zmq::context_t(1);
             socket = zmq::socket_t(context, ZMQ_SUB);
+            
+            // Set high water mark to control queue size - only keep most recent messages
+            socket.set(zmq::sockopt::rcvhwm, max_queue_size);
 
             if (!broker_public_key_path.empty()) {
                 std::ifstream pub_file(broker_public_key_path);

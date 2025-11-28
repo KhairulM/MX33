@@ -15,18 +15,23 @@ class Publisher {
     char broker_public_key[41]; // Public key for the broker
     char public_key[41]; // Public key for the publisher
     char secret_key[41]; // Secret key for the publisher
+    int queue_size; // Queue size for the publisher
 
     zmq::context_t context;
     zmq::socket_t socket;
 
     public:
         // Constructor
-        Publisher(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "") {
+        Publisher(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int queue_size = 1) {nt queue_size = 1) {
             this->name = name;
             this->broker_address = "tcp://" + broker_ip_address + ":5555";
+            this->queue_size = queue_size;
             
             context = zmq::context_t(1);
             socket = zmq::socket_t(context, ZMQ_PUB);
+            
+            // Set high water mark to control queue size
+            socket.set(zmq::sockopt::sndhwm, queue_size);
 
             if (!broker_public_key_path.empty()) {
                 std::ifstream pub_file(broker_public_key_path);
