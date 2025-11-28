@@ -7,10 +7,13 @@
 #include <mutex>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-#include <pcl/visualization/pcl_visualizer.h>
 #include <octomap/octomap.h>
 #include <octomap/OcTree.h>
 #include <octomap/Pointcloud.h>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <std_msgs/msg/header.hpp>
 
 // Communication libraries
 #include "server.hpp"
@@ -59,9 +62,8 @@ class MapServer {
     std::mutex pointclouds_mutex;
     std::mutex global_map_mutex;
 
-    bool enable_visualization;
-
-    // Optional: viewer removed to avoid dependency on PCL visualization
+    std::shared_ptr<rclcpp::Node> ros2_node;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher;
 
     public:
         // Constructor
@@ -71,15 +73,20 @@ class MapServer {
             std::string register_robot_service_name = "register_robot",
             std::string pointcloud_topic = "pointcloud_tf",
             std::string map_save_path = "global_map.pcd",
-            std::string broker_public_key_path = "",
-            bool enable_viz = true
+            std::string broker_public_key_path = ""
         )
         : register_robot_server("MapServer_RegisterRobot", broker_ip_address, register_robot_service_name)
         , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120)
         {
             _transformation_file_path = transformation_file_path;
-            enable_visualization = enable_viz;
             global_map_pcl = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
+            
+            // Initialize ROS 2
+            rclcpp::init(0, nullptr);
+            ros2_node = std::make_shared<rclcpp::Node>("map_server_node");
+            pointcloud_publisher = ros2_node->create_publisher<sensor_msgs::msg::PointCloud2>(
+                "/global_map", 10);
+            std::cout << "[MapServer] ROS 2 publisher initialized on topic /global_map" << std::endl;
         }
 
         void run() {
@@ -105,11 +112,7 @@ class MapServer {
             std::thread register_robot_thread(&MapServer::registerRobotThread, this);
             std::thread process_pointclouds_thread(&MapServer::processPointcloudsThread, this);
             std::thread construct_global_map_thread(&MapServer::constructGlobalMapThread, this);
-            
-            std::thread visualization_thread;
-            if (enable_visualization) {
-                visualization_thread = std::thread(&MapServer::visualizeGlobalMap, this);
-            }
+            std::thread ros2_spin_thread(&MapServer::ros2SpinThread, this);
 
             // Join the threads
             if (register_robot_thread.joinable()) {
@@ -121,9 +124,11 @@ class MapServer {
             if (construct_global_map_thread.joinable()) {
                 construct_global_map_thread.join();
             }
-            if (visualization_thread.joinable()) {
-                visualization_thread.join();
+            if (ros2_spin_thread.joinable()) {
+                ros2_spin_thread.join();
             }
+            
+            rclcpp::shutdown();
         }
 
         void registerRobotThread() {
@@ -245,10 +250,9 @@ class MapServer {
                 // Update inner nodes of the octomap
                 global_map.updateInnerOccupancy();
 
-                // Convert octomap to PCL point cloud for visualization
-                if (enable_visualization) {
-                    updatePCLPointCloud();
-                }
+                // Convert octomap to PCL point cloud and publish to ROS 2
+                updatePCLPointCloud();
+                publishPointCloud2();
 
                 // Sleep for a short duration before next update
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -315,58 +319,73 @@ class MapServer {
             }
         }
 
-        void visualizeGlobalMap() {
-            std::cout << "[MapServer] Starting PCL visualization..." << std::endl;
-            
-            // Wait a bit for initial data
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            
-            try {
-                // Create visualizer
-                pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Global Map - Real-time"));
-                viewer->setBackgroundColor(0, 0, 0);
-                viewer->addCoordinateSystem(1.0);
-                viewer->initCameraParameters();
-                viewer->setCameraPosition(0, 0, 10, 0, 0, 0, 0, 1, 0);
-                
-                bool cloud_added = false;
-                
-                while (!is_stopped && !viewer->wasStopped()) {
-                    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_copy;
-                    {
-                        std::lock_guard<std::mutex> lock(global_map_mutex);
-                        if (global_map_pcl && !global_map_pcl->empty()) {
-                            cloud_copy = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>(*global_map_pcl));
-                        }
-                    }
-                    
-                    if (cloud_copy && !cloud_copy->empty()) {
-                        if (!cloud_added) {
-                            viewer->addPointCloud<pcl::PointXYZRGB>(cloud_copy, "global_map");
-                            viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "global_map");
-                            cloud_added = true;
-                            std::cout << "[MapServer] Initial point cloud added: " << cloud_copy->points.size() << " voxels" << std::endl;
-                        } else {
-                            viewer->updatePointCloud<pcl::PointXYZRGB>(cloud_copy, "global_map");
-                        }
-                    }
-                    
-                    viewer->spinOnce(100);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        void ros2SpinThread() {
+            std::cout << "[MapServer] Starting ROS 2 spin thread..." << std::endl;
+            while (!is_stopped && rclcpp::ok()) {
+                rclcpp::spin_some(ros2_node);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            std::cout << "[MapServer] ROS 2 spin thread stopped." << std::endl;
+        }
+
+        void publishPointCloud2() {
+            if (!pointcloud_publisher) {
+                return;
+            }
+
+            pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_copy;
+            {
+                std::lock_guard<std::mutex> lock(global_map_mutex);
+                if (!global_map_pcl || global_map_pcl->empty()) {
+                    return;
                 }
+                cloud_copy = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>(*global_map_pcl));
+            }
+
+            // Create PointCloud2 message
+            auto cloud_msg = std::make_shared<sensor_msgs::msg::PointCloud2>();
+            
+            // Set header
+            cloud_msg->header.stamp = ros2_node->now();
+            cloud_msg->header.frame_id = "map";
+            
+            // Set dimensions
+            cloud_msg->height = 1;
+            cloud_msg->width = cloud_copy->points.size();
+            cloud_msg->is_bigendian = false;
+            cloud_msg->is_dense = false;
+            
+            // Set fields
+            sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
+            modifier.setPointCloud2Fields(4,
+                "x", 1, sensor_msgs::msg::PointField::FLOAT32,
+                "y", 1, sensor_msgs::msg::PointField::FLOAT32,
+                "z", 1, sensor_msgs::msg::PointField::FLOAT32,
+                "rgb", 1, sensor_msgs::msg::PointField::FLOAT32);
+            modifier.resize(cloud_copy->points.size());
+            
+            // Fill data
+            sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
+            sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
+            sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
+            sensor_msgs::PointCloud2Iterator<uint8_t> iter_r(*cloud_msg, "r");
+            sensor_msgs::PointCloud2Iterator<uint8_t> iter_g(*cloud_msg, "g");
+            sensor_msgs::PointCloud2Iterator<uint8_t> iter_b(*cloud_msg, "b");
+            
+            for (const auto& point : cloud_copy->points) {
+                *iter_x = point.x;
+                *iter_y = point.y;
+                *iter_z = point.z;
+                *iter_r = point.r;
+                *iter_g = point.g;
+                *iter_b = point.b;
                 
-                if (viewer->wasStopped()) {
-                    std::cout << "[MapServer] PCL visualization window closed by user." << std::endl;
-                    is_stopped = true;
-                }
-                
-                viewer->close();
-            } catch (const std::exception& e) {
-                std::cerr << "[MapServer] Visualization error: " << e.what() << std::endl;
-                std::cerr << "[MapServer] Continuing without visualization..." << std::endl;
+                ++iter_x; ++iter_y; ++iter_z;
+                ++iter_r; ++iter_g; ++iter_b;
             }
             
-            std::cout << "[MapServer] PCL visualization stopped." << std::endl;
+            // Publish
+            pointcloud_publisher->publish(*cloud_msg);
         }
 };
 
@@ -382,7 +401,6 @@ int main(int argc, char* argv[]) {
     std::string pointcloud_topic = "pointcloud_tf";
     std::string map_save_path = "global_map.pcd";
     std::string broker_public_key_path = "";
-    bool enable_visualization = false; // Disabled by default due to VTK/OpenGL issues
 
     // Parse command line arguments if needed
     if (argc > 1) {
@@ -394,15 +412,11 @@ int main(int argc, char* argv[]) {
     if (argc > 3) {
         broker_public_key_path = argv[3];
     }
-    if (argc > 4) {
-        std::string viz_arg = argv[4];
-        enable_visualization = (viz_arg != "0" && viz_arg != "false" && viz_arg != "no");
-    }
 
     std::cout << "[MapServer] Starting Map Server..." << std::endl;
     std::cout << "[MapServer] Broker address: " << broker_ip_address << std::endl;
     std::cout << "[MapServer] Transformation file: " << transformation_file_path << std::endl;
-    std::cout << "[MapServer] Visualization: " << (enable_visualization ? "enabled" : "disabled") << std::endl;
+    std::cout << "[MapServer] ROS 2 Publishing: enabled" << std::endl;
 
     MapServer map_server(
         broker_ip_address,
@@ -410,8 +424,7 @@ int main(int argc, char* argv[]) {
         register_robot_service_name,
         pointcloud_topic,
         map_save_path,
-        broker_public_key_path,
-        enable_visualization
+        broker_public_key_path
     );
 
     map_server.run();

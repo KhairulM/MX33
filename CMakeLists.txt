@@ -32,6 +32,11 @@ add_definitions(${PCL_DEFINITIONS})
 find_package(octomap REQUIRED)
 include_directories(${OCTOMAP_INCLUDE_DIRS})
 
+# ROS 2
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+
 # NLohhmann JSON
 # find_package(nlohmann_json 3.12.0 REQUIRED)
 
@@ -88,6 +93,7 @@ target_link_libraries(
     ${PCL_LIBRARIES}
     ${OCTOMAP_LIBRARIES}
 )
+ament_target_dependencies(map_server rclcpp sensor_msgs std_msgs)
 
 add_executable(robot robot.cpp)
 if(ZED_FOUND)
