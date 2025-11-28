@@ -92,7 +92,7 @@ class Broker {
                 frontend.set(zmq::sockopt::curve_secretkey, private_key);
             }
             // Set high water marks to prevent message accumulation
-            frontend.set(zmq::sockopt::rcvhwm, 1);
+            // frontend.set(zmq::sockopt::rcvhwm, 1);
             frontend.bind(mFrontendAddress);
 
             zmq::socket_t backend(context, ZMQ_XPUB);
@@ -101,7 +101,7 @@ class Broker {
                 backend.set(zmq::sockopt::curve_secretkey, private_key);
             }
             // Set high water marks to prevent message accumulation
-            backend.set(zmq::sockopt::sndhwm, 1);
+            // backend.set(zmq::sockopt::sndhwm, 1);
             backend.bind(mBackendAddress);
 
             // Manual proxy loop so we can terminate gracefully
