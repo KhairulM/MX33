@@ -4,9 +4,9 @@
 
 int main() {
     // NOTE: set this to your broker's service-name-lookup REP endpoint
-    const std::string broker_lookup_address = "tcp://localhost:5557"; // <- adjust to your broker's lookup address
+    const std::string broker_lookup_address = "localhost"; // <- adjust to your broker's lookup address
 
-    Client<String::Request, String::Response> client(broker_lookup_address, "string_service" /*, "path/to/broker_pubkey"*/);
+    Client<String::Request, String::Response> client("demo_client", broker_lookup_address, "string_service");
 
     String::Request req;
     req.hostname = "client_host";
