@@ -29,6 +29,7 @@
 
 // Srvs
 #include "srvs/register_robot.hpp"
+#include "srvs/get_frontiers.hpp"
 
 std::atomic<bool> is_stopped(false);
 
@@ -58,6 +59,7 @@ class MapServer {
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr global_map_pcl; // PCL version for visualization
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
+    Server<GetFrontiers::Request, GetFrontiers::Response> get_frontiers_server;
     
     Subscriber<PointcloudTF> pointcloud_subscriber;
 
@@ -79,6 +81,7 @@ class MapServer {
             std::string broker_public_key_path = ""
         )
         : register_robot_server("MapServer_RegisterRobot", broker_ip_address, register_robot_service_name)
+        
         , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120)
         {
             _transformation_file_path = transformation_file_path;
@@ -310,7 +313,7 @@ class MapServer {
                     point.z = it.getZ();
                     
                     // Color by height
-                    float z_normalized = (point.z + 2.0f) / 4.0f; // Normalize z to [0, 1]
+                    float z_normalized = (point.z + 2.5f) / 6.0f; // Normalize z to [0, 1]
                     z_normalized = std::max(0.0f, std::min(1.0f, z_normalized));
                     
                     // Create rainbow color gradient based on height
