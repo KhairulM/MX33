@@ -58,6 +58,7 @@ class MapServer {
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr global_map_pcl; // PCL version for visualization
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
+    
     Subscriber<PointcloudTF> pointcloud_subscriber;
 
     std::mutex robots_mutex;
@@ -105,7 +106,7 @@ class MapServer {
                 while (infile >> robot_id >> transform.x >> transform.y >> transform.z
                        >> transform.qx >> transform.qy >> transform.qz >> transform.qw) {
                     global_to_odom_tf[robot_id] = transform;
-                    std::cout << "[MapServer] Loaded global to odom transformation for robot " << robot_id << " from " << _transformation_file_path << std::endl;
+                    std::cout << "[MapServer] Loaded global to odom transformation for " << robot_id << " from " << _transformation_file_path << std::endl;
                 }
                 infile.close();
             }
@@ -159,8 +160,14 @@ class MapServer {
                 new_robot.global_to_odom_transform = Transform{0, 0, 0, 0, 0, 0, 1}; // Identity transform
 
                 // If a global to odom transformation exists for this robot, use it
+                std::cout << "[MapServer] Robot id:" << req.id << std::endl;
+                std::cout << "[MapServer] Robot ip address:" << req.ip_address << std::endl;
+                for (const auto& [key, value] : global_to_odom_tf) {
+                    std::cout << "[MapServer] Available transformation key: " << key << std::endl;
+                }
                 if (global_to_odom_tf.find(req.id) != global_to_odom_tf.end()) {
                     new_robot.global_to_odom_transform = global_to_odom_tf[req.id];
+                    std::cout << "[MapServer] Assigned existing global to odom transformation for robot " << req.id << std::endl;
                 }
 
                 {
@@ -198,8 +205,8 @@ class MapServer {
                 qz = msg->odom_to_base_link_transform.qz;
                 qw = msg->odom_to_base_link_transform.qw;
 
-                std::cout << "Robot Pose x:" << x << " y:" << y << " z:" << z << std::endl;
-                std::cout << "Robot Orientation qx:" << qx << " qy:" << qy << " qz:" << qz << " w:" << qw << std::endl; 
+                // std::cout << "Robot Pose x:" << x << " y:" << y << " z:" << z << std::endl;
+                // std::cout << "Robot Orientation qx:" << qx << " qy:" << qy << " qz:" << qz << " w:" << qw << std::endl; 
 
                 {
                     std::lock_guard<std::mutex> lk(pointclouds_mutex);

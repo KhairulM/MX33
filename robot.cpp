@@ -35,7 +35,8 @@ void signalHandler(int signum) {
 }
 
 enum CameraType {
-    REALSENSE
+    REALSENSE,
+    RANDOM
 #ifdef ZED_AVAILABLE
     , ZED
 #endif
@@ -58,6 +59,11 @@ class RobotClient {
     const int camera_fps = 15; // Camera frames per second
 
     PointcloudTF msg;
+
+    // Random pointcloud generation
+    std::random_device rd;
+    std::mt19937 gen;
+    std::uniform_real_distribution<float> pos_dist;
 
     // RealSense specific
     rs2::pipeline camera_pipeline;
@@ -83,7 +89,7 @@ public:
         CameraType cam_type = REALSENSE
     ): register_client("robot_register_client", broker_ip_address, register_service_name, broker_public_key_path), 
        pointcloud_publisher(robot_id + "_PointcloudPublisher", broker_ip_address, pointcloud_topic, broker_public_key_path),
-       camera_type(cam_type)
+       camera_type(cam_type), gen(rd()), pos_dist(-2.0f, 2.0f)
     {
         this->robot_id = id;
         this->broker_ip_address = broker_ip_address;
@@ -95,6 +101,8 @@ public:
             // Initialize RealSense
             decimation_filter = rs2::decimation_filter(decimation_magnitude);
             rs_config.enable_stream(RS2_STREAM_DEPTH, resolution_width, resolution_height, RS2_FORMAT_Z16, camera_fps);
+        } else if (camera_type == RANDOM) {
+            std::cout << "[Robot " << robot_id << "] Using random pointcloud generation for testing" << std::endl;
         }
 #ifdef ZED_AVAILABLE
         else if (camera_type == ZED) {
@@ -183,6 +191,37 @@ public:
         msg.pointcloud.pointcloud_data = pointcloud_data;
     }
 
+    void generateRandomPointcloud() {
+        if (camera_type != RANDOM) return;
+        
+        // Generate random pointcloud with 1000-5000 points
+        std::uniform_int_distribution<int> point_count_dist(1000, 5000);
+        int num_points = point_count_dist(gen);
+        
+        std::vector<float> pointcloud_data;
+        pointcloud_data.reserve(num_points * 3);
+        
+        for (int i = 0; i < num_points; i++) {
+            pointcloud_data.push_back(pos_dist(gen)); // x
+            pointcloud_data.push_back(pos_dist(gen)); // y
+            pointcloud_data.push_back(pos_dist(gen)); // z
+        }
+        
+        // Update message
+        msg.pointcloud.width = num_points;
+        msg.pointcloud.height = 1;
+        msg.pointcloud.pointcloud_data = pointcloud_data;
+        
+        // Use identity transform for random pointcloud
+        msg.odom_to_base_link_transform.x = 0.0f;
+        msg.odom_to_base_link_transform.y = 0.0f;
+        msg.odom_to_base_link_transform.z = 0.0f;
+        msg.odom_to_base_link_transform.qx = 0.0f;
+        msg.odom_to_base_link_transform.qy = 0.0f;
+        msg.odom_to_base_link_transform.qz = 0.0f;
+        msg.odom_to_base_link_transform.qw = 1.0f;
+    }
+
     void captureZEDFrame() {
 #ifdef ZED_AVAILABLE
         if (camera_type != ZED) return;
@@ -245,12 +284,15 @@ public:
     }
 
     void publishPointcloud() {
+        if (camera_type == RANDOM) {
+            generateRandomPointcloud();
+        }
 #ifdef ZED_AVAILABLE
-        if (camera_type == ZED) {
+        else if (camera_type == ZED) {
             captureZEDFrame();
-        } else
+        }
 #endif
-        {
+        else {
             // For RealSense, use identity transform (no built-in pose tracking)
             msg.odom_to_base_link_transform.x = 0.0f;
             msg.odom_to_base_link_transform.y = 0.0f;
@@ -277,6 +319,8 @@ public:
             camera_pipeline.start(rs_config, [this](const rs2::frame& frame) {
                 this->realsenseCameraCallback(frame);
             });
+        } else if (camera_type == RANDOM) {
+            std::cout << "[Robot " << robot_id << "] Starting random pointcloud generation..." << std::endl;
         }
                 
         // Start publishing pointclouds
@@ -289,6 +333,8 @@ public:
         // Stop the camera
         if (camera_type == REALSENSE) {
             camera_pipeline.stop();
+        } else if (camera_type == RANDOM) {
+            std::cout << "[Robot " << robot_id << "] Stopping random pointcloud generation..." << std::endl;
         }
 #ifdef ZED_AVAILABLE
         else if (camera_type == ZED) {
@@ -326,12 +372,15 @@ int main(int argc, char* argv[]) {
 
     // Determine camera type
     CameraType camera_type = REALSENSE;
+    if (camera_type_str == "random" || camera_type_str == "RANDOM") {
+        camera_type = RANDOM;
+    }
 #ifdef ZED_AVAILABLE
-    if (camera_type_str == "zed" || camera_type_str == "ZED") {
+    else if (camera_type_str == "zed" || camera_type_str == "ZED") {
         camera_type = ZED;
     }
 #else
-    if (camera_type_str == "zed" || camera_type_str == "ZED") {
+    else if (camera_type_str == "zed" || camera_type_str == "ZED") {
         std::cerr << "ZED camera requested but ZED SDK not available. Falling back to RealSense." << std::endl;
     }
 #endif
@@ -340,6 +389,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Robot ID: " << robot_id << std::endl;
     std::cout << "Broker IP address: " << broker_ip_address << std::endl;
     std::cout << "Camera type: " << (
+        camera_type == RANDOM ? "Random" :
 #ifdef ZED_AVAILABLE
         camera_type == ZED ? "ZED" : 
 #endif
