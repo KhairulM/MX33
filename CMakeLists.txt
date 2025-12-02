@@ -93,7 +93,7 @@ target_link_libraries(
     ${PCL_LIBRARIES}
     ${OCTOMAP_LIBRARIES}
 )
-ament_target_dependencies(map_server rclcpp sensor_msgs std_msgs)
+ament_target_dependencies(map_server rclcpp sensor_msgs std_msgs geometry_msgs)
 
 add_executable(robot robot.cpp)
 if(ZED_FOUND)

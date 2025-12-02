@@ -15,6 +15,7 @@
 #include <rclcpp/qos.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/header.hpp>
 
 // Communication libraries
@@ -69,20 +70,20 @@ class MapServer {
 
     std::shared_ptr<rclcpp::Node> ros2_node;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher;
+    std::map<std::string, rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr> robot_pose_publishers;
 
     public:
         // Constructor
         MapServer(
             std::string broker_ip_address,
             std::string transformation_file_path = "",
-            std::string register_robot_service_name = "register_robot",
             std::string pointcloud_topic = "pointcloud_tf",
             std::string map_save_path = "global_map.pcd",
             std::string broker_public_key_path = ""
         )
-        : register_robot_server("MapServer_RegisterRobot", broker_ip_address, register_robot_service_name)
-        
-        , pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120)
+        : register_robot_server("MapServer_RegisterRobot", broker_ip_address, "register_robot"),
+        get_frontiers_server("MapServer_GetFrontiers", broker_ip_address, "get_frontiers"),
+        pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120)
         {
             _transformation_file_path = transformation_file_path;
             global_map_pcl = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -92,6 +93,7 @@ class MapServer {
             ros2_node = std::make_shared<rclcpp::Node>("map_server_node");
             pointcloud_publisher = ros2_node->create_publisher<sensor_msgs::msg::PointCloud2>(
                 "/global_map", rclcpp::QoS(1).best_effort().durability_volatile());
+            
             std::cout << "[MapServer] ROS 2 publisher initialized on topic /global_map" << std::endl;
         }
 
@@ -116,6 +118,7 @@ class MapServer {
 
             // Start the threads
             std::thread register_robot_thread(&MapServer::registerRobotThread, this);
+            std::thread get_frontiers_thread(&MapServer::getFrontiersThread, this);
             std::thread process_pointclouds_thread(&MapServer::processPointcloudsThread, this);
             std::thread construct_global_map_thread(&MapServer::constructGlobalMapThread, this);
             std::thread ros2_spin_thread(&MapServer::ros2SpinThread, this);
@@ -123,6 +126,9 @@ class MapServer {
             // Join the threads
             if (register_robot_thread.joinable()) {
                 register_robot_thread.join();
+            }
+            if (get_frontiers_thread.joinable()) {
+                get_frontiers_thread.join();
             }
             if (process_pointclouds_thread.joinable()) {
                 process_pointclouds_thread.join();
@@ -178,6 +184,9 @@ class MapServer {
                     robots[req.id] = new_robot;
                 }
 
+                robot_pose_publishers[req.id] = ros2_node->create_publisher<geometry_msgs::msg::PoseStamped>(
+                    "/" + req.id + "/pose", rclcpp::QoS(1).best_effort().durability_volatile());
+
                 res.success = true;
                 res.message = "[MapServer] Robot with ID " + req.id + " registered successfully.";
                 std::cout << res.message << std::endl;
@@ -187,6 +196,26 @@ class MapServer {
             register_robot_server.run(&is_stopped);
         }
 
+        void getFrontiersThread() {
+            get_frontiers_server.registerService();
+            get_frontiers_server.onRequestObject([this](const GetFrontiers::Request& req) -> GetFrontiers::Response {
+                GetFrontiers::Response res;
+                
+                std::cout << "[MapServer] Received get frontiers request for bounds: " 
+                         << "x[" << req.x_min << "," << req.x_max << "] "
+                         << "y[" << req.y_min << "," << req.y_max << "] "
+                         << "z[" << req.z_min << "," << req.z_max << "]" << std::endl;
+                
+                // Find frontiers within the specified bounding box
+                res.frontiers = findFrontiers(req.x_min, req.x_max, req.y_min, req.y_max, req.z_min, req.z_max);
+                
+                std::cout << "[MapServer] Found " << res.frontiers.size() << " frontier points" << std::endl;
+                return res;
+            });
+
+            get_frontiers_server.run(&is_stopped);
+        }
+        
         void processPointcloudsThread() {
             while (!is_stopped) {
                 auto msg = pointcloud_subscriber.getMessageObjectPtr();
@@ -197,6 +226,7 @@ class MapServer {
 
                 // Extract robot_id from the message
                 std::string robot_id = msg->robot_id;
+
                 float x, y, z;
                 float qx, qy, qz, qw;
 
@@ -256,7 +286,7 @@ class MapServer {
 
                     // Calculate the transformation from base_link frame to global frame
                     // Points in the pointcloud are in the base_link frame, we need to transform them to global frame
-                    Transform base_link_to_global = global_to_odom * odom_to_base_link;
+                    Transform base_link_to_global = global_to_odom * odom_to_base_link;                    
 
                     // Transform the pointcloud data using the combined transformation
                     octomap::Pointcloud octo_pointcloud;
@@ -275,7 +305,9 @@ class MapServer {
                     octomap::point3d sensor_origin(0.0f, 0.0f, 0.0f); // global origin
                     global_map.insertPointCloud(octo_pointcloud, sensor_origin, -1, false, true);
                     // global_map.insertPointCloud(octo_pointcloud, sensor_origin);
-
+                    
+                    // Publish the robot's pose in the global frame
+                    publishRobotPose(robot_id, base_link_to_global);
                 }
 
                 // Update inner nodes of the octomap
@@ -409,6 +441,95 @@ class MapServer {
             // Publish
             pointcloud_publisher->publish(*cloud_msg);
         }
+
+        void publishRobotPose(const std::string& robot_id, const Transform& base_link_to_global) {
+            auto pose_publisher_it = robot_pose_publishers.find(robot_id);
+            if (pose_publisher_it == robot_pose_publishers.end()) {
+                std::cout << "[MapServer] No pose publisher found for robot " << robot_id << std::endl;
+                return;
+            }
+
+            geometry_msgs::msg::PoseStamped pose_msg;
+            pose_msg.header.stamp = ros2_node->now();
+            pose_msg.header.frame_id = "map";
+            pose_msg.pose.position.x = base_link_to_global.x;
+            pose_msg.pose.position.y = base_link_to_global.y;
+            pose_msg.pose.position.z = base_link_to_global.z;
+            pose_msg.pose.orientation.x = base_link_to_global.qx;
+            pose_msg.pose.orientation.y = base_link_to_global.qy;
+            pose_msg.pose.orientation.z = base_link_to_global.qz;
+            pose_msg.pose.orientation.w = base_link_to_global.qw;
+
+            pose_publisher_it->second->publish(pose_msg);
+        }
+
+    private:
+        std::vector<std::array<float, 3>> findFrontiers(float x_min, float x_max, float y_min, float y_max, float z_min, float z_max) {
+            std::vector<std::array<float, 3>> frontiers;
+            
+            // Lock the global map to ensure thread safety
+            std::lock_guard<std::mutex> lock(global_map_mutex);
+            
+            // Get the resolution of the octomap
+            double resolution = global_map.getResolution();
+            
+            // Iterate through all leaf nodes in the specified bounding box
+            for (octomap::OcTree::leaf_bbx_iterator it = global_map.begin_leafs_bbx(
+                    octomap::point3d(x_min, y_min, z_min), 
+                    octomap::point3d(x_max, y_max, z_max)), 
+                 end = global_map.end_leafs_bbx(); it != end; ++it) {
+                
+                // Check if the current cell is free (not occupied)
+                if (!global_map.isNodeOccupied(*it)) {
+                    octomap::point3d center = it.getCoordinate();
+                    
+                    // Check if this free cell has any unknown neighbors (frontier condition)
+                    if (isFrontierCell(center, resolution)) {
+                        frontiers.push_back({
+                            static_cast<float>(center.x()),
+                            static_cast<float>(center.y()),
+                            static_cast<float>(center.z())
+                        });
+                    }
+                }
+            }
+            
+            return frontiers;
+        }
+        
+        bool isFrontierCell(const octomap::point3d& center, double resolution) {
+            // Define the 26 neighboring directions (3D connectivity)
+            const std::vector<std::array<int, 3>> neighbor_offsets = {
+                // 6-connectivity (face neighbors)
+                {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1},
+                // 12 additional edge neighbors
+                {-1, -1, 0}, {-1, 1, 0}, {1, -1, 0}, {1, 1, 0},
+                {-1, 0, -1}, {-1, 0, 1}, {1, 0, -1}, {1, 0, 1},
+                {0, -1, -1}, {0, -1, 1}, {0, 1, -1}, {0, 1, 1},
+                // 8 additional corner neighbors
+                {-1, -1, -1}, {-1, -1, 1}, {-1, 1, -1}, {-1, 1, 1},
+                {1, -1, -1}, {1, -1, 1}, {1, 1, -1}, {1, 1, 1}
+            };
+            
+            // Check each neighbor
+            for (const auto& offset : neighbor_offsets) {
+                octomap::point3d neighbor(
+                    center.x() + offset[0] * resolution,
+                    center.y() + offset[1] * resolution,
+                    center.z() + offset[2] * resolution
+                );
+                
+                // Search for the neighbor node
+                octomap::OcTreeNode* neighbor_node = global_map.search(neighbor);
+                
+                // If neighbor is unknown (null node), this is a frontier
+                if (neighbor_node == nullptr) {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
 };
 
 int main(int argc, char* argv[]) {
@@ -419,7 +540,6 @@ int main(int argc, char* argv[]) {
     // Default parameters
     std::string broker_ip_address = "localhost";
     std::string transformation_file_path = "global_to_odom_tf.txt";
-    std::string register_robot_service_name = "register_robot";
     std::string pointcloud_topic = "pointcloud_tf";
     std::string map_save_path = "global_map.pcd";
     std::string broker_public_key_path = "";
@@ -443,7 +563,6 @@ int main(int argc, char* argv[]) {
     MapServer map_server(
         broker_ip_address,
         transformation_file_path,
-        register_robot_service_name,
         pointcloud_topic,
         map_save_path,
         broker_public_key_path

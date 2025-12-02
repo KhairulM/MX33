@@ -1,10 +1,13 @@
+#include <msgpack.hpp>
+
 namespace GetFrontiers {
     class Request {
         public:
-            std::string robot_id = "";
-            float radius = 0.0f;
+            float x_min, x_max;
+            float y_min, y_max;
+            float z_min, z_max;
 
-        MSGPACK_DEFINE(robot_id, radius);
+        MSGPACK_DEFINE(x_min, x_max, y_min, y_max, z_min, z_max);
     };
 
     class Response {
