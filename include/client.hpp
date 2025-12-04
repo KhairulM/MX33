@@ -58,8 +58,8 @@ public:
         service_lookup_socket.send(zmq::buffer(service_name), zmq::send_flags::none);
 
         zmq::message_t lookup_reply;
-        bool ok = service_lookup_socket.recv(lookup_reply, zmq::recv_flags::none);
-        if (!ok) {
+        auto ok = service_lookup_socket.recv(lookup_reply, zmq::recv_flags::none);
+        if (!ok.has_value()) {
             throw std::runtime_error("[" + name + "] Lookup failed: no reply from broker");
         }
 
@@ -92,7 +92,7 @@ public:
         // 4) Receive and unpack response (blocking with timeout)
         zmq::message_t resp_msg;
         auto recv_result = service_socket.recv(resp_msg, zmq::recv_flags::none);
-        if (!recv_result) {
+        if (!recv_result.has_value()) {
             throw std::runtime_error("[" + name + "] Failed to receive response from service (timeout or error)");
         }
 
