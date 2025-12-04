@@ -26,6 +26,7 @@
 // Msgs
 #include "msgs/pointcloud.hpp"
 #include "msgs/transforms.hpp"
+#include "msgs/pointcloud.hpp"
 #include "msgs/pointcloud_tf.hpp"
 
 // Srvs
@@ -33,6 +34,7 @@
 #include "srvs/get_frontiers.hpp"
 
 std::atomic<bool> is_stopped(false);
+std::atomic<bool> updated_pointclouds(false);
 
 void signalHandler(int signum) {
     std::cout << "\n[MapServer] Interrupt signal (" << signum << ") received. Shutting down..." << std::endl;
@@ -43,18 +45,19 @@ class Robot {
     public:
         std::string id;
         std::string ip_address;
-        Transform global_to_odom_transform;
+        Transform global_to_base_link_tf;
+        Pointcloud pointcloud;
 
         bool connected = false;
 };
 
 class MapServer {
-    std::string _transformation_file_path;
+    std::string gto_file_path;
 
+    // List of robots
     std::map<std::string, Robot> robots;
-    std::map<std::string, PointcloudTF> robot_pointclouds; // Individual scans for each robot
-    std::map<std::string, Transform> global_to_odom_tf; // Global to odom transformations for each robot
-
+    std::map<std::string, Transform> robot_gtos; // Global to odom transformation defined in an external file
+    
     // pcl::PointCloud<pcl::PointXYZ>::Ptr global_map;
     octomap::OcTree global_map{0.1f}; // OctoMap resolution in meters
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr global_map_pcl; // PCL version for visualization
@@ -65,7 +68,6 @@ class MapServer {
     Subscriber<PointcloudTF> pointcloud_subscriber;
 
     std::mutex robots_mutex;
-    std::mutex pointclouds_mutex;
     std::mutex global_map_mutex;
 
     std::shared_ptr<rclcpp::Node> ros2_node;
@@ -85,7 +87,7 @@ class MapServer {
         get_frontiers_server("MapServer_GetFrontiers", broker_ip_address, "get_frontiers"),
         pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120)
         {
-            _transformation_file_path = transformation_file_path;
+            gto_file_path = transformation_file_path;
             global_map_pcl = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
             
             // Initialize ROS 2
@@ -99,7 +101,7 @@ class MapServer {
 
         void run() {
             // Read the global to local transformation file path
-            std::ifstream infile(_transformation_file_path);
+            std::ifstream infile(gto_file_path);
             if (!infile.is_open()) {
                 std::cout << "[MapServer] No existing transformation from global to robot's odom file found" << std::endl;
             } else {
@@ -110,8 +112,8 @@ class MapServer {
                 Transform transform;
                 while (infile >> robot_id >> transform.x >> transform.y >> transform.z
                        >> transform.qx >> transform.qy >> transform.qz >> transform.qw) {
-                    global_to_odom_tf[robot_id] = transform;
-                    std::cout << "[MapServer] Loaded global to odom transformation for " << robot_id << " from " << _transformation_file_path << std::endl;
+                    robot_gtos[robot_id] = transform;
+                    std::cout << "[MapServer] Loaded global to odom transformation for " << robot_id << " from " << gto_file_path << std::endl;
                 }
                 infile.close();
             }
@@ -165,17 +167,15 @@ class MapServer {
                 Robot new_robot;
                 new_robot.id = req.id;
                 new_robot.ip_address = req.ip_address;
-                new_robot.connected = true; // Mark as connected upon registration
-                new_robot.global_to_odom_transform = Transform{0, 0, 0, 0, 0, 0, 1}; // Identity transform
+                new_robot.connected = true;
 
-                // If a global to odom transformation exists for this robot, use it
-                std::cout << "[MapServer] Robot id:" << req.id << std::endl;
-                std::cout << "[MapServer] Robot ip address:" << req.ip_address << std::endl;
-                for (const auto& [key, value] : global_to_odom_tf) {
-                    std::cout << "[MapServer] Available transformation key: " << key << std::endl;
-                }
-                if (global_to_odom_tf.find(req.id) != global_to_odom_tf.end()) {
-                    new_robot.global_to_odom_transform = global_to_odom_tf[req.id];
+                std::cout << "[MapServer] New robot registration received" << std::endl;
+                std::cout << "[MapServer] Robot id: " << req.id << std::endl;
+                std::cout << "[MapServer] Robot ip address: " << req.ip_address << std::endl;
+                
+                // If a global to odom transformation exists for this robot, use it as the initial global to base link transformation
+                if (robot_gtos.find(req.id) != robot_gtos.end()) {
+                    new_robot.global_to_base_link_tf = robot_gtos[req.id];
                     std::cout << "[MapServer] Assigned existing global to odom transformation for robot " << req.id << std::endl;
                 }
 
@@ -189,6 +189,7 @@ class MapServer {
 
                 res.success = true;
                 res.message = "[MapServer] Robot with ID " + req.id + " registered successfully.";
+                
                 std::cout << res.message << std::endl;
                 return res;
             });
@@ -202,12 +203,21 @@ class MapServer {
                 GetFrontiers::Response res;
                 
                 std::cout << "[MapServer] Received get frontiers request for bounds: " 
-                         << "x[" << req.x_min << "," << req.x_max << "] "
-                         << "y[" << req.y_min << "," << req.y_max << "] "
-                         << "z[" << req.z_min << "," << req.z_max << "]" << std::endl;
+                         << "\nx[" << req.x_min << "," << req.x_max << "] "
+                         << "\ny[" << req.y_min << "," << req.y_max << "] "
+                         << "\nz[" << req.z_min << "," << req.z_max << "]" 
+                         << "\nmin_radius_from_robot: " << req.min_radius_from_robot
+                         << "\noccupied_neighbors_cell_dist: " << req.occupied_neighbors_cell_dist 
+                         << std::endl;
                 
-                // Find frontiers within the specified bounding box
-                res.frontiers = findFrontiers(req.x_min, req.x_max, req.y_min, req.y_max, req.z_min, req.z_max);
+                // Find frontiers which satisfies the parameters
+                res.frontiers = findFrontiers(
+                    req.x_min, req.x_max, 
+                    req.y_min, req.y_max, 
+                    req.z_min, req.z_max,
+                    req.min_radius_from_robot,
+                    req.occupied_neighbors_cell_dist
+                );
                 
                 std::cout << "[MapServer] Found " << res.frontiers.size() << " frontier points" << std::endl;
                 return res;
@@ -224,28 +234,45 @@ class MapServer {
                     continue;
                 }
 
-                // Extract robot_id from the message
+                // Update the robot global to base link transformation
                 std::string robot_id = msg->robot_id;
 
-                float x, y, z;
-                float qx, qy, qz, qw;
+                // Check if the robot is registered
+                if (robots.find(robot_id) == robots.end()) {
+                    std::cout << "[MapServer] Robot ID: " << robot_id << " is not registered in the map server" << std::endl;
+                    continue;
+                }
 
-                x = msg->odom_to_base_link_transform.x;
-                y = msg->odom_to_base_link_transform.y;
-                z = msg->odom_to_base_link_transform.z;
-                qx = msg->odom_to_base_link_transform.qx;
-                qy = msg->odom_to_base_link_transform.qy;
-                qz = msg->odom_to_base_link_transform.qz;
-                qw = msg->odom_to_base_link_transform.qw;
+                // Check if there is a global to odom tf assigned for this robot, if not, we use an identity transformation
+                Transform global_to_odom_tf;
+                global_to_odom_tf.qw = 1.0;
+                if (robot_gtos.find(robot_id) == robot_gtos.end()) continue;
+
+                global_to_odom_tf = robot_gtos[robot_id];
+                {
+                    std::lock_guard<std::mutex> lock(robots_mutex);
+                    // Calculate the transformation from global to base link and store it in the robots map
+                    robots[robot_id].global_to_base_link_tf = global_to_odom_tf * msg->odom_to_base_link_transform;
+                    robots[robot_id].pointcloud = msg->pointcloud;
+                    updated_pointclouds = true;
+                }
+
+
+                // float x, y, z;
+                // float qx, qy, qz, qw;
+
+                // x = msg->odom_to_base_link_transform.x;
+                // y = msg->odom_to_base_link_transform.y;
+                // z = msg->odom_to_base_link_transform.z;
+                // qx = msg->odom_to_base_link_transform.qx;
+                // qy = msg->odom_to_base_link_transform.qy;
+                // qz = msg->odom_to_base_link_transform.qz;
+                // qw = msg->odom_to_base_link_transform.qw;
 
                 // std::cout << "Robot Pose x:" << x << " y:" << y << " z:" << z << std::endl;
                 // std::cout << "Robot Orientation qx:" << qx << " qy:" << qy << " qz:" << qz << " w:" << qw << std::endl; 
-
-                {
-                    std::lock_guard<std::mutex> lk(pointclouds_mutex);
-                    robot_pointclouds[robot_id] = *msg;
-                }
             }
+
             pointcloud_subscriber.stop();
             std::cout << "[MapServer] Pointcloud processing thread stopped." << std::endl;
         }
@@ -253,40 +280,30 @@ class MapServer {
         void constructGlobalMapThread() {
             // Combine all robots' pointclouds into a global map
             while (!is_stopped) {
-                // Snapshot pointclouds to minimize lock holding
-                std::map<std::string, PointcloudTF> snapshot;
+                if (!updated_pointclouds) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+                
+                // Snapshot robot's to minimize lock holding
+                std::map<std::string, Robot> snapshot;
                 {
-                    std::lock_guard<std::mutex> lk(pointclouds_mutex);
-                    snapshot = robot_pointclouds;
+                    std::lock_guard<std::mutex> lk(robots_mutex);
+                    snapshot = robots;
+                    updated_pointclouds = false;
                 }
 
                 // For each robot, transform its pointcloud to the global frame and merge
                 for (auto it = snapshot.begin(); it != snapshot.end(); ++it) {
                     const std::string& robot_id = it->first;
-                    const PointcloudTF& pc_tf = it->second;
+                    const Robot& robot = it->second;
 
-
-                    const Pointcloud& pointcloud = pc_tf.pointcloud;
-                    const Transform& odom_to_base_link = pc_tf.odom_to_base_link_transform;
+                    const Pointcloud& pointcloud = robot.pointcloud;
+                    const Transform& global_to_base_link_tf = robot.global_to_base_link_tf;
 
                     int pointcloud_width = pointcloud.width;
                     int pointcloud_height = pointcloud.height;
-                    const std::vector<float>& pointcloud_data = pointcloud.pointcloud_data;
-                    
-                    // Get the robot's global to odom transformation
-                    Transform global_to_odom;
-                    {
-                        std::lock_guard<std::mutex> lk(robots_mutex);
-                        if (robots.find(robot_id) == robots.end()) {
-                            std::cout << "[MapServer] Robot ID " << robot_id << " not found in registered robots." << std::endl;
-                            continue;
-                        }
-                        global_to_odom = robots[robot_id].global_to_odom_transform;
-                    }
-
-                    // Calculate the transformation from base_link frame to global frame
-                    // Points in the pointcloud are in the base_link frame, we need to transform them to global frame
-                    Transform base_link_to_global = global_to_odom * odom_to_base_link;                    
+                    const std::vector<float>& pointcloud_data = pointcloud.pointcloud_data;                
 
                     // Transform the pointcloud data using the combined transformation
                     octomap::Pointcloud octo_pointcloud;
@@ -297,17 +314,21 @@ class MapServer {
 
                     for (size_t i = 0; i < pointcloud_data.size(); i += 3) {
                         std::array<float,3> p{ pointcloud_data[i], pointcloud_data[i+1], pointcloud_data[i+2] };
-                        auto tp = base_link_to_global.transformPoint(p);
+                        auto tp = global_to_base_link_tf.transformPoint(p);
                         octo_pointcloud.push_back(tp[0], tp[1], tp[2]);
                     }
 
                     // Update the octomap with the transformed pointcloud
-                    octomap::point3d sensor_origin(0.0f, 0.0f, 0.0f); // global origin
+                    octomap::point3d sensor_origin(
+                        global_to_base_link_tf.x, 
+                        global_to_base_link_tf.y,
+                        global_to_base_link_tf.z
+                    );
                     global_map.insertPointCloud(octo_pointcloud, sensor_origin, -1, false, true);
                     // global_map.insertPointCloud(octo_pointcloud, sensor_origin);
                     
                     // Publish the robot's pose in the global frame
-                    publishRobotPose(robot_id, base_link_to_global);
+                    publishRobotPose(robot_id, global_to_base_link_tf);
                 }
 
                 // Update inner nodes of the octomap
@@ -333,7 +354,8 @@ class MapServer {
             std::cout << "[MapServer] Global map construction thread stopped." << std::endl;
         }
 
-        void updatePCLPointCloud() {
+    private:
+    void updatePCLPointCloud() {
             // Convert OctoMap to PCL point cloud
             pcl::PointCloud<pcl::PointXYZRGB>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
             
@@ -463,8 +485,13 @@ class MapServer {
             pose_publisher_it->second->publish(pose_msg);
         }
 
-    private:
-        std::vector<std::array<float, 3>> findFrontiers(float x_min, float x_max, float y_min, float y_max, float z_min, float z_max) {
+        std::vector<std::array<float, 3>> findFrontiers(
+            float x_min, float x_max, 
+            float y_min, float y_max, 
+            float z_min, float z_max,
+            float min_radius_from_robot,
+            int occupied_neighbors_cell_dist
+        ) {
             std::vector<std::array<float, 3>> frontiers;
             
             // Lock the global map to ensure thread safety
@@ -480,17 +507,20 @@ class MapServer {
                  end = global_map.end_leafs_bbx(); it != end; ++it) {
                 
                 // Check if the current cell is free (not occupied)
-                if (!global_map.isNodeOccupied(*it)) {
-                    octomap::point3d center = it.getCoordinate();
-                    
-                    // Check if this free cell has any unknown neighbors (frontier condition)
-                    if (isFrontierCell(center, resolution)) {
-                        frontiers.push_back({
-                            static_cast<float>(center.x()),
-                            static_cast<float>(center.y()),
-                            static_cast<float>(center.z())
-                        });
-                    }
+                if (global_map.isNodeOccupied(*it)) continue;
+
+                octomap::point3d center = it.getCoordinate();
+                
+                // TODO: Check if this point is within min_radius_from_robot from any robot
+                // TODO: Use occupied_neighbors_cell_dist parameter
+                
+                // Check if this free cell has any unknown neighbors (frontier condition)
+                if (isFrontierCell(center, resolution)) {
+                    frontiers.push_back({
+                        static_cast<float>(center.x()),
+                        static_cast<float>(center.y()),
+                        static_cast<float>(center.z())
+                    });
                 }
             }
             
