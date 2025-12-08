@@ -34,7 +34,6 @@
 #include "srvs/get_frontiers.hpp"
 
 std::atomic<bool> is_stopped(false);
-std::atomic<bool> updated_pointclouds(false);
 
 void signalHandler(int signum) {
     std::cout << "\n[MapServer] Interrupt signal (" << signum << ") received. Shutting down..." << std::endl;
@@ -243,18 +242,19 @@ class MapServer {
                     continue;
                 }
 
+
                 // Check if there is a global to odom tf assigned for this robot, if not, we use an identity transformation
                 Transform global_to_odom_tf;
                 global_to_odom_tf.qw = 1.0;
-                if (robot_gtos.find(robot_id) == robot_gtos.end()) continue;
+                if (robot_gtos.find(robot_id) != robot_gtos.end()) {
+                    global_to_odom_tf = robot_gtos[robot_id];
+                }
 
-                global_to_odom_tf = robot_gtos[robot_id];
                 {
                     std::lock_guard<std::mutex> lock(robots_mutex);
                     // Calculate the transformation from global to base link and store it in the robots map
                     robots[robot_id].global_to_base_link_tf = global_to_odom_tf * msg->odom_to_base_link_transform;
                     robots[robot_id].pointcloud = msg->pointcloud;
-                    updated_pointclouds = true;
                 }
 
 
@@ -279,18 +279,12 @@ class MapServer {
 
         void constructGlobalMapThread() {
             // Combine all robots' pointclouds into a global map
-            while (!is_stopped) {
-                if (!updated_pointclouds) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                    continue;
-                }
-                
+            while (!is_stopped) {                
                 // Snapshot robot's to minimize lock holding
                 std::map<std::string, Robot> snapshot;
                 {
                     std::lock_guard<std::mutex> lk(robots_mutex);
                     snapshot = robots;
-                    updated_pointclouds = false;
                 }
 
                 // For each robot, transform its pointcloud to the global frame and merge
