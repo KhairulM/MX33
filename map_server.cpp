@@ -488,6 +488,19 @@ class MapServer {
         ) {
             std::vector<std::array<float, 3>> frontiers;
             
+            // Get robot positions for distance checking
+            std::vector<std::array<float, 3>> robot_positions;
+            {
+                std::lock_guard<std::mutex> lock(robots_mutex);
+                for (const auto& pair : robots) {
+                    robot_positions.push_back({
+                        pair.second.global_to_base_link_tf.x,
+                        pair.second.global_to_base_link_tf.y,
+                        pair.second.global_to_base_link_tf.z
+                    });
+                }
+            }
+            
             // Lock the global map to ensure thread safety
             std::lock_guard<std::mutex> lock(global_map_mutex);
             
@@ -505,11 +518,22 @@ class MapServer {
 
                 octomap::point3d center = it.getCoordinate();
                 
-                // TODO: Check if this point is within min_radius_from_robot from any robot
-                // TODO: Use occupied_neighbors_cell_dist parameter
+                // Check if this point is too close to any robot
+                bool too_close_to_robot = false;
+                for (const auto& robot_pos : robot_positions) {
+                    float dx = center.x() - robot_pos[0];
+                    float dy = center.y() - robot_pos[1];
+                    float dz = center.z() - robot_pos[2];
+                    float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                    if (dist < min_radius_from_robot) {
+                        too_close_to_robot = true;
+                        break;
+                    }
+                }
+                if (too_close_to_robot) continue;
                 
-                // Check if this free cell has any unknown neighbors (frontier condition)
-                if (isFrontierCell(center, resolution)) {
+                // Check if this free cell is a frontier (has unknown neighbors and no nearby obstacles)
+                if (isFrontierCell(center, resolution, occupied_neighbors_cell_dist)) {
                     frontiers.push_back({
                         static_cast<float>(center.x()),
                         static_cast<float>(center.y()),
@@ -521,38 +545,51 @@ class MapServer {
             return frontiers;
         }
         
-        bool isFrontierCell(const octomap::point3d& center, double resolution) {
-            // Define the 26 neighboring directions (3D connectivity)
-            const std::vector<std::array<int, 3>> neighbor_offsets = {
-                // 6-connectivity (face neighbors)
-                {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1},
-                // 12 additional edge neighbors
-                {-1, -1, 0}, {-1, 1, 0}, {1, -1, 0}, {1, 1, 0},
-                {-1, 0, -1}, {-1, 0, 1}, {1, 0, -1}, {1, 0, 1},
-                {0, -1, -1}, {0, -1, 1}, {0, 1, -1}, {0, 1, 1},
-                // 8 additional corner neighbors
-                {-1, -1, -1}, {-1, -1, 1}, {-1, 1, -1}, {-1, 1, 1},
-                {1, -1, -1}, {1, -1, 1}, {1, 1, -1}, {1, 1, 1}
+        bool isFrontierCell(const octomap::point3d& center, double resolution, int occupied_neighbors_cell_dist) {
+            bool has_unknown_neighbor = false;
+            
+            // First check: Must have at least one unknown neighbor (6-connectivity for speed)
+            const std::vector<std::array<int, 3>> face_neighbors = {
+                {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}
             };
             
-            // Check each neighbor
-            for (const auto& offset : neighbor_offsets) {
+            for (const auto& offset : face_neighbors) {
                 octomap::point3d neighbor(
                     center.x() + offset[0] * resolution,
                     center.y() + offset[1] * resolution,
                     center.z() + offset[2] * resolution
                 );
                 
-                // Search for the neighbor node
                 octomap::OcTreeNode* neighbor_node = global_map.search(neighbor);
-                
-                // If neighbor is unknown (null node), this is a frontier
                 if (neighbor_node == nullptr) {
-                    return true;
+                    has_unknown_neighbor = true;
+                    break;
                 }
             }
             
-            return false;
+            // If no unknown neighbors, this is not a frontier
+            if (!has_unknown_neighbor) return false;
+            
+            // Second check: No occupied cells within occupied_neighbors_cell_dist (using 6-connectivity)
+            if (occupied_neighbors_cell_dist > 0) {
+                for (int dist = 1; dist <= occupied_neighbors_cell_dist; dist++) {
+                    for (const auto& offset : face_neighbors) {
+                        octomap::point3d neighbor(
+                            center.x() + offset[0] * dist * resolution,
+                            center.y() + offset[1] * dist * resolution,
+                            center.z() + offset[2] * dist * resolution
+                        );
+                        
+                        octomap::OcTreeNode* neighbor_node = global_map.search(neighbor);
+                        // If there's an occupied cell nearby, reject this frontier
+                        if (neighbor_node != nullptr && global_map.isNodeOccupied(neighbor_node)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            
+            return true;
         }
 };
 

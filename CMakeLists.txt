@@ -77,6 +77,12 @@ if(BUILD_EXAMPLES)
         demo_service_client
         cppzmq
     )
+    
+    add_executable(test_get_frontiers demo/test_get_frontiers.cpp)
+    target_link_libraries(
+        test_get_frontiers
+        cppzmq
+    )
 
 endif()
 
