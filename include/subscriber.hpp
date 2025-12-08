@@ -62,7 +62,7 @@ class Subscriber {
 
     public:
         // Constructor
-        Subscriber(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int max_queue_size = 1) {
+        Subscriber(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int max_queue_size = 10) {
             this->name = name;
             this->broker_address = "tcp://" + broker_ip_address + ":5556";
             this->topic = topic;

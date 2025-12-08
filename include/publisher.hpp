@@ -22,7 +22,7 @@ class Publisher {
 
     public:
         // Constructor
-        Publisher(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int queue_size = 1) {
+        Publisher(std::string name, std::string broker_ip_address, std::string topic, std::string broker_public_key_path = "", int queue_size = 10) {
             this->name = name;
             this->broker_address = "tcp://" + broker_ip_address + ":5555";
             this->queue_size = queue_size;
