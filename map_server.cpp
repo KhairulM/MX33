@@ -279,7 +279,7 @@ class MapServer {
 
         void constructGlobalMapThread() {
             // Combine all robots' pointclouds into a global map
-            while (!is_stopped) {                
+            while (!is_stopped) {            
                 // Snapshot robot's to minimize lock holding
                 std::map<std::string, Robot> snapshot;
                 {
