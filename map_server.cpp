@@ -5,18 +5,23 @@
 #include <csignal>
 #include <map>
 #include <mutex>
+
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <octomap/octomap.h>
 #include <octomap/OcTree.h>
 #include <octomap/Pointcloud.h>
-#include <rclcpp/rclcpp.hpp>
+
+// ROS 2 library
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/qos.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/header.hpp>
+
+// 3rd Party Libraries
+#include "yaml-cpp/yaml.h"
 
 // Communication libraries
 #include "server.hpp"
@@ -58,7 +63,9 @@ class MapServer {
     std::map<std::string, Transform> robot_gtos; // Global to odom transformation defined in an external file
     
     // pcl::PointCloud<pcl::PointXYZ>::Ptr global_map;
-    octomap::OcTree global_map{0.1f}; // OctoMap resolution in meters
+    float map_resolution;
+    std::string map_save_path;
+    std::shared_ptr<octomap::OcTree> global_map; // OctoMap resolution in meters
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr global_map_pcl; // PCL version for visualization
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
@@ -77,16 +84,20 @@ class MapServer {
         // Constructor
         MapServer(
             std::string broker_ip_address,
+            std::string broker_public_key_path = "",
             std::string transformation_file_path = "",
+            float map_resolution = 0.1f,
+            std::string map_save_path = "",
             std::string pointcloud_topic = "pointcloud_tf",
-            std::string map_save_path = "global_map.pcd",
-            std::string broker_public_key_path = ""
+            std::string register_robot_name = "register_robot",
+            std::string get_frontiers_name = "get_frontiers"
         )
-        : register_robot_server("MapServer_RegisterRobot", broker_ip_address, "register_robot"),
-        get_frontiers_server("MapServer_GetFrontiers", broker_ip_address, "get_frontiers"),
-        pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120)
+        : pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120),
+        register_robot_server("MapServer_RegisterRobot", broker_ip_address, register_robot_name),
+        get_frontiers_server("MapServer_GetFrontiers", broker_ip_address, get_frontiers_name)
         {
             gto_file_path = transformation_file_path;
+            global_map = std::make_shared<octomap::OcTree>(map_resolution);
             global_map_pcl = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
             
             // Initialize ROS 2
@@ -318,15 +329,15 @@ class MapServer {
                         global_to_base_link_tf.y,
                         global_to_base_link_tf.z
                     );
-                    global_map.insertPointCloud(octo_pointcloud, sensor_origin, -1, false, true);
-                    // global_map.insertPointCloud(octo_pointcloud, sensor_origin);
+                    global_map->insertPointCloud(octo_pointcloud, sensor_origin, -1, false, true);
+                    // global_map->insertPointCloud(octo_pointcloud, sensor_origin);
                     
                     // Publish the robot's pose in the global frame
                     publishRobotPose(robot_id, global_to_base_link_tf);
                 }
 
                 // Update inner nodes of the octomap
-                // global_map.updateInnerOccupancy();
+                // global_map->updateInnerOccupancy();
 
                 // Convert octomap to PCL point cloud and publish to ROS 2
                 updatePCLPointCloud();
@@ -337,9 +348,8 @@ class MapServer {
             }
             
             // Save the global map to a file
-            std::string octomap_filename = "global_map.ot";
-            std::cout << "[MapServer] Saving global map to " << octomap_filename << "..." << std::endl;
-            if (global_map.write(octomap_filename)) {
+            std::cout << "[MapServer] Saving global map to " << map_save_path << "..." << std::endl;
+            if (global_map->write(map_save_path)) {
                 std::cout << "[MapServer] Global map saved successfully." << std::endl;
             } else {
                 std::cerr << "[MapServer] Failed to save global map." << std::endl;
@@ -353,8 +363,8 @@ class MapServer {
             // Convert OctoMap to PCL point cloud
             pcl::PointCloud<pcl::PointXYZRGB>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
             
-            for (octomap::OcTree::leaf_iterator it = global_map.begin_leafs(), end = global_map.end_leafs(); it != end; ++it) {
-                if (global_map.isNodeOccupied(*it)) {
+            for (octomap::OcTree::leaf_iterator it = global_map->begin_leafs(), end = global_map->end_leafs(); it != end; ++it) {
+                if (global_map->isNodeOccupied(*it)) {
                     pcl::PointXYZRGB point;
                     point.x = it.getX();
                     point.y = it.getY();
@@ -505,16 +515,16 @@ class MapServer {
             std::lock_guard<std::mutex> lock(global_map_mutex);
             
             // Get the resolution of the octomap
-            double resolution = global_map.getResolution();
+            double resolution = global_map->getResolution();
             
             // Iterate through all leaf nodes in the specified bounding box
-            for (octomap::OcTree::leaf_bbx_iterator it = global_map.begin_leafs_bbx(
+            for (octomap::OcTree::leaf_bbx_iterator it = global_map->begin_leafs_bbx(
                     octomap::point3d(x_min, y_min, z_min), 
                     octomap::point3d(x_max, y_max, z_max)), 
-                 end = global_map.end_leafs_bbx(); it != end; ++it) {
+                 end = global_map->end_leafs_bbx(); it != end; ++it) {
                 
                 // Check if the current cell is free (not occupied)
-                if (global_map.isNodeOccupied(*it)) continue;
+                if (global_map->isNodeOccupied(*it)) continue;
 
                 octomap::point3d center = it.getCoordinate();
                 
@@ -560,7 +570,7 @@ class MapServer {
                     center.z() + offset[2] * resolution
                 );
                 
-                octomap::OcTreeNode* neighbor_node = global_map.search(neighbor);
+                octomap::OcTreeNode* neighbor_node = global_map->search(neighbor);
                 if (neighbor_node == nullptr) {
                     has_unknown_neighbor = true;
                     break;
@@ -580,9 +590,9 @@ class MapServer {
                             center.z() + offset[2] * dist * resolution
                         );
                         
-                        octomap::OcTreeNode* neighbor_node = global_map.search(neighbor);
+                        octomap::OcTreeNode* neighbor_node = global_map->search(neighbor);
                         // If there's an occupied cell nearby, reject this frontier
-                        if (neighbor_node != nullptr && global_map.isNodeOccupied(neighbor_node)) {
+                        if (neighbor_node != nullptr && global_map->isNodeOccupied(neighbor_node)) {
                             return false;
                         }
                     }
@@ -598,35 +608,50 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
-    // Default parameters
-    std::string broker_ip_address = "localhost";
-    std::string transformation_file_path = "global_to_odom_tf.txt";
-    std::string pointcloud_topic = "pointcloud_tf";
-    std::string map_save_path = "global_map.pcd";
-    std::string broker_public_key_path = "";
-
-    // Parse command line arguments if needed
+    // Default config file path
+    std::string config_file = "config.yaml";
+    
+    // Allow override via command line
     if (argc > 1) {
-        broker_ip_address = argv[1];
+        config_file = argv[1];
     }
-    if (argc > 2) {
-        transformation_file_path = argv[2];
+
+    // Load configuration
+    YAML::Node config;
+    try {
+        config = YAML::LoadFile(config_file);
+    } catch (const std::exception& e) {
+        std::cerr << "[MapServer] Failed to load config file: " << e.what() << std::endl;
+        std::cerr << "[MapServer] Using default values" << std::endl;
     }
-    if (argc > 3) {
-        broker_public_key_path = argv[3];
-    }
+
+    // Read map_server configuration with defaults
+    std::string broker_ip_address = config["map_server"]["broker_ip_address"].as<std::string>("localhost");
+    std::string broker_public_key_path = config["map_server"]["broker_public_key_path"].as<std::string>("");
+    std::string transformation_file_path = config["map_server"]["transformation_file_path"].as<std::string>("global_to_odom_tf.txt");
+    std::string map_save_path = config["map_server"]["map_save_path"].as<std::string>("global_map.ot");
+    float map_resolution = config["map_server"]["map_resolution"].as<float>(0.1f);
+    std::string pointcloud_topic = config["map_server"]["pointcloud_topic"].as<std::string>("pointcloud_tf");
+    std::string register_robot_name = config["map_server"]["register_robot_name"].as<std::string>("register_robot");
+    std::string get_frontiers_name = config["map_server"]["get_frontiers_name"].as<std::string>("get_frontiers");
+
 
     std::cout << "[MapServer] Starting Map Server..." << std::endl;
+    std::cout << "[MapServer] Configuration loaded from: " << config_file << std::endl;
     std::cout << "[MapServer] Broker address: " << broker_ip_address << std::endl;
     std::cout << "[MapServer] Transformation file: " << transformation_file_path << std::endl;
+    std::cout << "[MapServer] Map Resolution: " << map_resolution << std::endl;
     std::cout << "[MapServer] ROS 2 Publishing: enabled" << std::endl;
 
     MapServer map_server(
         broker_ip_address,
+        broker_public_key_path,
         transformation_file_path,
-        pointcloud_topic,
+        map_resolution,
         map_save_path,
-        broker_public_key_path
+        pointcloud_topic,
+        register_robot_name,
+        get_frontiers_name
     );
 
     map_server.run();

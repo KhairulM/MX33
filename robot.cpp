@@ -13,6 +13,8 @@
 #include <sl/Camera.hpp>
 #endif
 
+#include "yaml-cpp/yaml.h"
+
 // Communication libraries
 #include "client.hpp"
 #include "publisher.hpp"
@@ -52,11 +54,16 @@ class RobotClient {
 
     CameraType camera_type;
 
-    // Configure RealSense camera
-    const int resolution_width = 640; // Camera width
-    const int resolution_height = 480; // Camera height
-    const int decimation_magnitude = 8; // Decimation filter magnitude
-    const int camera_fps = 15; // Camera frames per second
+    // Configure camera parameters
+    int resolution_width = 640; // Camera width
+    int resolution_height = 480; // Camera height
+    int decimation_magnitude = 8; // Decimation filter magnitude
+    int camera_fps = 15; // Camera frames per second
+    
+#ifdef ZED_AVAILABLE
+    sl::RESOLUTION zed_resolution = sl::RESOLUTION::HD720;
+    sl::DEPTH_MODE zed_depth_mode = sl::DEPTH_MODE::PERFORMANCE;
+#endif
 
     PointcloudTF msg;
 
@@ -86,10 +93,23 @@ public:
         std::string pointcloud_topic = "pointcloud_tf",
         std::string register_service_name = "register_robot",
         std::string broker_key_path = "",
-        CameraType cam_type = REALSENSE
+        CameraType cam_type = REALSENSE,
+        int res_width = 640,
+        int res_height = 480,
+        int decim_mag = 8,
+        int fps = 15
+#ifdef ZED_AVAILABLE
+        , sl::RESOLUTION zed_res = sl::RESOLUTION::HD720,
+        sl::DEPTH_MODE zed_depth = sl::DEPTH_MODE::PERFORMANCE
+#endif
     ): register_client("robot_register_client", broker_ip_address, register_service_name, broker_public_key_path), 
        pointcloud_publisher(robot_id + "_PointcloudPublisher", broker_ip_address, pointcloud_topic, broker_public_key_path),
-       camera_type(cam_type), gen(rd()), pos_dist(-2.0f, 2.0f)
+       camera_type(cam_type), gen(rd()), pos_dist(-2.0f, 2.0f),
+       resolution_width(res_width), resolution_height(res_height),
+       decimation_magnitude(decim_mag), camera_fps(fps)
+#ifdef ZED_AVAILABLE
+       , zed_resolution(zed_res), zed_depth_mode(zed_depth)
+#endif
     {
         this->robot_id = id;
         this->broker_ip_address = broker_ip_address;
@@ -107,11 +127,11 @@ public:
 #ifdef ZED_AVAILABLE
         else if (camera_type == ZED) {
             // Initialize ZED
-            zed_init_params.camera_resolution = sl::RESOLUTION::HD720;
+            zed_init_params.camera_resolution = zed_resolution;
             zed_init_params.camera_fps = camera_fps;
             zed_init_params.coordinate_units = sl::UNIT::METER;
             zed_init_params.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP;
-            zed_init_params.depth_mode = sl::DEPTH_MODE::PERFORMANCE;
+            zed_init_params.depth_mode = zed_depth_mode;
             
             // Enable positional tracking for pose
             sl::PositionalTrackingParameters tracking_params;
@@ -351,24 +371,28 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
-    // Parse command line arguments
-    std::string robot_id = "1";
-    std::string broker_ip_address = "localhost";
-    std::string broker_public_key_path = "";
-    std::string camera_type_str = "realsense"; // Default to RealSense
-
+    // Default config file path
+    std::string config_file = "config.yaml";
+    
+    // Allow override via command line
     if (argc > 1) {
-        robot_id = argv[1];
+        config_file = argv[1];
     }
-    if (argc > 2) {
-        broker_ip_address = argv[2];
+
+    // Load configuration
+    YAML::Node config;
+    try {
+        config = YAML::LoadFile(config_file);
+    } catch (const std::exception& e) {
+        std::cerr << "[Robot] Failed to load config file: " << e.what() << std::endl;
+        std::cerr << "[Robot] Using default values" << std::endl;
     }
-    if (argc > 3) {
-        broker_public_key_path = argv[3];
-    }
-    if (argc > 4) {
-        camera_type_str = argv[4];
-    }
+
+    // Read robot configuration with defaults
+    std::string robot_id = config["robot"]["robot_id"].as<std::string>("1");
+    std::string broker_ip_address = config["robot"]["broker_ip_address"].as<std::string>("localhost");
+    std::string broker_public_key_path = config["robot"]["broker_public_key_path"].as<std::string>("");
+    std::string camera_type_str = config["robot"]["camera_type"].as<std::string>("realsense");
 
     // Determine camera type
     CameraType camera_type = REALSENSE;
@@ -381,21 +405,78 @@ int main(int argc, char* argv[]) {
     }
 #else
     else if (camera_type_str == "zed" || camera_type_str == "ZED") {
-        std::cerr << "ZED camera requested but ZED SDK not available. Falling back to RealSense." << std::endl;
+        std::cerr << "[Robot] ZED camera requested but ZED SDK not available. Falling back to RealSense." << std::endl;
     }
 #endif
 
-    std::cout << "Starting Robot Client..." << std::endl;
-    std::cout << "Robot ID: " << robot_id << std::endl;
-    std::cout << "Broker IP address: " << broker_ip_address << std::endl;
-    std::cout << "Camera type: " << (
+    // Read camera-specific parameters
+    int resolution_width = 640;
+    int resolution_height = 480;
+    int decimation_magnitude = 8;
+    int camera_fps = 15;
+
+#ifdef ZED_AVAILABLE
+    sl::RESOLUTION zed_resolution = sl::RESOLUTION::HD720;
+    sl::DEPTH_MODE zed_depth_mode = sl::DEPTH_MODE::PERFORMANCE;
+#endif
+
+    if (camera_type == REALSENSE) {
+        resolution_width = config["robot"]["realsense"]["resolution_width"].as<int>(640);
+        resolution_height = config["robot"]["realsense"]["resolution_height"].as<int>(480);
+        decimation_magnitude = config["robot"]["realsense"]["decimation_magnitude"].as<int>(8);
+        camera_fps = config["robot"]["realsense"]["camera_fps"].as<int>(15);
+    }
+#ifdef ZED_AVAILABLE
+    else if (camera_type == ZED) {
+        std::string zed_res_str = config["robot"]["zed"]["resolution"].as<std::string>("HD720");
+        camera_fps = config["robot"]["zed"]["camera_fps"].as<int>(15);
+        std::string zed_depth_str = config["robot"]["zed"]["depth_mode"].as<std::string>("PERFORMANCE");
+
+        // Convert resolution string to enum
+        if (zed_res_str == "HD2K") zed_resolution = sl::RESOLUTION::HD2K;
+        else if (zed_res_str == "HD1080") zed_resolution = sl::RESOLUTION::HD1080;
+        else if (zed_res_str == "HD720") zed_resolution = sl::RESOLUTION::HD720;
+        else if (zed_res_str == "VGA") zed_resolution = sl::RESOLUTION::VGA;
+
+        // Convert depth mode string to enum
+        if (zed_depth_str == "ULTRA") zed_depth_mode = sl::DEPTH_MODE::ULTRA;
+        else if (zed_depth_str == "QUALITY") zed_depth_mode = sl::DEPTH_MODE::QUALITY;
+        else if (zed_depth_str == "PERFORMANCE") zed_depth_mode = sl::DEPTH_MODE::PERFORMANCE;
+        else if (zed_depth_str == "NEURAL") zed_depth_mode = sl::DEPTH_MODE::NEURAL;
+    }
+#endif
+
+    std::cout << "[Robot] Starting Robot Client..." << std::endl;
+    std::cout << "[Robot] Configuration loaded from: " << config_file << std::endl;
+    std::cout << "[Robot] Robot ID: " << robot_id << std::endl;
+    std::cout << "[Robot] Broker IP address: " << broker_ip_address << std::endl;
+    std::cout << "[Robot] Camera type: " << (
         camera_type == RANDOM ? "Random" :
 #ifdef ZED_AVAILABLE
         camera_type == ZED ? "ZED" : 
 #endif
         "RealSense") << std::endl;
 
-    RobotClient robot(robot_id, broker_ip_address, "pointcloud_tf", "register_robot", broker_public_key_path, camera_type);
+    if (camera_type == REALSENSE) {
+        std::cout << "[Robot] RealSense config: " << resolution_width << "x" << resolution_height 
+                  << " @ " << camera_fps << " fps, decimation: " << decimation_magnitude << std::endl;
+    }
+#ifdef ZED_AVAILABLE
+    else if (camera_type == ZED) {
+        std::cout << "[Robot] ZED config: fps=" << camera_fps << std::endl;
+    }
+#endif
+
+#ifdef ZED_AVAILABLE
+    RobotClient robot(robot_id, broker_ip_address, "pointcloud_tf", "register_robot", 
+                      broker_public_key_path, camera_type, resolution_width, resolution_height, 
+                      decimation_magnitude, camera_fps, zed_resolution, zed_depth_mode);
+#else
+    RobotClient robot(robot_id, broker_ip_address, "pointcloud_tf", "register_robot", 
+                      broker_public_key_path, camera_type, resolution_width, resolution_height, 
+                      decimation_magnitude, camera_fps);
+#endif
+
     robot.run();
 
     return 0;

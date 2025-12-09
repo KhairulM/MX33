@@ -37,8 +37,9 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
-# NLohhmann JSON
-# find_package(nlohmann_json 3.12.0 REQUIRED)
+# yaml-cpp (use local version)
+add_subdirectory(lib/yaml-cpp)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib/yaml-cpp/include)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -90,6 +91,7 @@ add_executable(broker broker.cpp)
 target_link_libraries(
     broker
     cppzmq
+    yaml-cpp
 )
 
 add_executable(map_server map_server.cpp)
@@ -98,6 +100,7 @@ target_link_libraries(
     cppzmq
     ${PCL_LIBRARIES}
     ${OCTOMAP_LIBRARIES}
+    yaml-cpp
 )
 ament_target_dependencies(map_server rclcpp sensor_msgs std_msgs geometry_msgs)
 
@@ -109,6 +112,7 @@ if(ZED_FOUND)
         realsense2
         ${PCL_LIBRARIES}
         ${ZED_LIBRARIES}
+        yaml-cpp
     )
 else()
     target_link_libraries(
@@ -116,5 +120,6 @@ else()
         cppzmq
         realsense2
         ${PCL_LIBRARIES}
+        yaml-cpp
     )
 endif()

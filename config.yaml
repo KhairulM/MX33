@@ -1,0 +1,39 @@
+# MX33 Configuration File
+
+broker:
+  frontend_port: 5555
+  backend_port: 5556
+  service_registry_lookup_port: 5557
+  service_registry_add_port: 5558
+
+map_server:
+  broker_ip_address: localhost
+  transformation_file_path: ../global_to_odom_tf.txt
+  map_resolution: 0.1  # meters
+  map_save_path: global_map.ot
+  broker_public_key_path: ""
+  pointcloud_topic: pointcloud_tf
+  register_robot_name: register_robot
+  get_frontiers_name: get_frontiers
+  
+
+robot:
+  robot_id: ugv01
+  broker_ip_address: localhost
+  pointcloud_topic: pointcloud_tf
+  register_service_name: register_robot
+  broker_public_key_path: ""
+  camera_type: realsense  # Options: realsense, zed, random
+  
+  # RealSense camera settings
+  realsense:
+    resolution_width: 640
+    resolution_height: 480
+    decimation_magnitude: 8
+    fps: 15
+  
+  # ZED camera settings
+  zed:
+    resolution: HD720  # Options: HD2K, HD1080, HD720, VGA
+    fps: 15
+    depth_mode: PERFORMANCE  # Options: PERFORMANCE, QUALITY, ULTRA

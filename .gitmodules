@@ -15,3 +15,6 @@
 	path = lib/octomap
 	url = https://github.com/OctoMap/octomap.git
 	branch = v1.10.0
+[submodule "lib/yaml-cpp"]
+	path = lib/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
