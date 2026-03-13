@@ -8,13 +8,14 @@ broker:
 
 map_server:
   broker_ip_address: localhost
-  transformation_file_path: ../global_to_odom_tf.txt
-  map_resolution: 0.1  # meters
+  transformation_file_path: /home/control-lab/mx33_demo/MX33/global_to_odom_tf_scene3.txt
+  map_resolution: 0.2  # meters
   map_save_path: global_map.ot
   broker_public_key_path: ""
   pointcloud_topic: pointcloud_tf
   register_robot_name: register_robot
   get_frontiers_name: get_frontiers
+  frame_id: "world"
   
 
 robot:

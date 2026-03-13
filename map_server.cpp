@@ -67,6 +67,7 @@ class MapServer {
     std::string map_save_path;
     std::shared_ptr<octomap::OcTree> global_map; // OctoMap resolution in meters
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr global_map_pcl; // PCL version for visualization
+    std::string frame_id;
 
     Server<RegisterRobot::Request, RegisterRobot::Response> register_robot_server;
     Server<GetFrontiers::Request, GetFrontiers::Response> get_frontiers_server;
@@ -80,6 +81,13 @@ class MapServer {
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_publisher;
     std::map<std::string, rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr> robot_pose_publishers;
 
+    double prob_hit_ {0.65};
+    double prob_miss_ {0.45};
+    double occupancy_thres_ {0.7};
+    double insert_max_range_ {5.0};
+    double clamp_thres_min_ {0.12};
+    double clamp_thres_max_ {0.97};
+
     public:
         // Constructor
         MapServer(
@@ -90,7 +98,8 @@ class MapServer {
             std::string map_save_path = "",
             std::string pointcloud_topic = "pointcloud_tf",
             std::string register_robot_name = "register_robot",
-            std::string get_frontiers_name = "get_frontiers"
+            std::string get_frontiers_name = "get_frontiers",
+            std::string frame_id_name = "world"
         )
         : pointcloud_subscriber("MapServer_PointcloudSubscriber", broker_ip_address, pointcloud_topic, broker_public_key_path, 120),
         register_robot_server("MapServer_RegisterRobot", broker_ip_address, register_robot_name),
@@ -99,7 +108,8 @@ class MapServer {
             gto_file_path = transformation_file_path;
             global_map = std::make_shared<octomap::OcTree>(map_resolution);
             global_map_pcl = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
-            
+            frame_id = frame_id_name;
+
             // Initialize ROS 2
             rclcpp::init(0, nullptr);
             ros2_node = std::make_shared<rclcpp::Node>("map_server_node");
@@ -289,6 +299,12 @@ class MapServer {
         }
 
         void constructGlobalMapThread() {
+            global_map->setProbHit(prob_hit_);
+            global_map->setProbMiss(prob_miss_);
+            global_map->setOccupancyThres(occupancy_thres_);
+            global_map->setClampingThresMin(clamp_thres_min_);
+            global_map->setClampingThresMax(clamp_thres_max_);
+
             // Combine all robots' pointclouds into a global map
             while (!is_stopped) {            
                 // Snapshot robot's to minimize lock holding
@@ -302,6 +318,12 @@ class MapServer {
                 for (auto it = snapshot.begin(); it != snapshot.end(); ++it) {
                     const std::string& robot_id = it->first;
                     const Robot& robot = it->second;
+
+                    if (robot_id == "ugv01" || robot_id == "ugv02") {
+                        const Transform& global_to_base_link_tf = robot.global_to_base_link_tf;
+                        publishRobotPose(robot_id, global_to_base_link_tf);
+                        continue;
+                    }
 
                     const Pointcloud& pointcloud = robot.pointcloud;
                     const Transform& global_to_base_link_tf = robot.global_to_base_link_tf;
@@ -329,8 +351,9 @@ class MapServer {
                         global_to_base_link_tf.y,
                         global_to_base_link_tf.z
                     );
-                    global_map->insertPointCloud(octo_pointcloud, sensor_origin, -1, false, true);
+                    // global_map->insertPointCloud(octo_pointcloud, sensor_origin, -1, false, true);
                     // global_map->insertPointCloud(octo_pointcloud, sensor_origin);
+                    global_map->insertPointCloud(octo_pointcloud, sensor_origin, insert_max_range_, false, true);
                     
                     // Publish the robot's pose in the global frame
                     publishRobotPose(robot_id, global_to_base_link_tf);
@@ -427,7 +450,7 @@ class MapServer {
             
             // Set header
             cloud_msg->header.stamp = ros2_node->now();
-            cloud_msg->header.frame_id = "map";
+            cloud_msg->header.frame_id = frame_id;
             
             // Set dimensions
             cloud_msg->height = 1;
@@ -477,7 +500,7 @@ class MapServer {
 
             geometry_msgs::msg::PoseStamped pose_msg;
             pose_msg.header.stamp = ros2_node->now();
-            pose_msg.header.frame_id = "map";
+            pose_msg.header.frame_id = frame_id;
             pose_msg.pose.position.x = base_link_to_global.x;
             pose_msg.pose.position.y = base_link_to_global.y;
             pose_msg.pose.position.z = base_link_to_global.z;
@@ -560,7 +583,10 @@ class MapServer {
             
             // First check: Must have at least one unknown neighbor (6-connectivity for speed)
             const std::vector<std::array<int, 3>> face_neighbors = {
-                {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}
+                {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1},
+                {-1, -1, 0}, {1, -1, 0}, {-1, 1, 0}, {1, 1, 0},
+                {0, -1, -1}, {0, 1, -1}, {0, -1, 1}, {0, 1, 1},
+                {-1, 0, -1}, {1, 0, -1}, {-1, 0, 1}, {1, 0, 1}
             };
             
             for (const auto& offset : face_neighbors) {
@@ -634,13 +660,14 @@ int main(int argc, char* argv[]) {
     std::string pointcloud_topic = config["map_server"]["pointcloud_topic"].as<std::string>("pointcloud_tf");
     std::string register_robot_name = config["map_server"]["register_robot_name"].as<std::string>("register_robot");
     std::string get_frontiers_name = config["map_server"]["get_frontiers_name"].as<std::string>("get_frontiers");
-
+    std::string frame_id = config["map_server"]["frame_id"].as<std::string>("world");
 
     std::cout << "[MapServer] Starting Map Server..." << std::endl;
     std::cout << "[MapServer] Configuration loaded from: " << config_file << std::endl;
     std::cout << "[MapServer] Broker address: " << broker_ip_address << std::endl;
     std::cout << "[MapServer] Transformation file: " << transformation_file_path << std::endl;
     std::cout << "[MapServer] Map Resolution: " << map_resolution << std::endl;
+    std::cout << "[MapServer] Frame id: " << frame_id << std::endl;
     std::cout << "[MapServer] ROS 2 Publishing: enabled" << std::endl;
 
     MapServer map_server(
@@ -651,7 +678,8 @@ int main(int argc, char* argv[]) {
         map_save_path,
         pointcloud_topic,
         register_robot_name,
-        get_frontiers_name
+        get_frontiers_name,
+        frame_id
     );
 
     map_server.run();
